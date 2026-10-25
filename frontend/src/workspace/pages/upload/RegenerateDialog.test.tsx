@@ -44,7 +44,7 @@ describe("RegenerateDialog", () => {
     act(() => root.render(<RegenerateDialog videoId="v1" clip={clip} totalClips={3} onClose={onClose} onQueued={onQueued} />));
     click("Regenerate clip");
     await flush();
-    expect(regenerateClip).toHaveBeenCalledWith("c1", "both");
+    expect(regenerateClip).toHaveBeenCalledWith("c1", "both", undefined);
     expect(regenerateVideoClips).not.toHaveBeenCalled();
     expect(onQueued).toHaveBeenCalledWith(expect.objectContaining({ scope: "this", mode: "both", queued: 1 }));
     expect(onClose).toHaveBeenCalled();
@@ -78,5 +78,27 @@ describe("RegenerateDialog", () => {
     await flush();
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("Clip is busy");
     expect(onClose).not.toHaveBeenCalled();
+  });
+  it("extends a clip past its end with +15s, capped at the video length", async () => {
+    const timed = { ...clip, start_ms: 60_000, end_ms: 102_000 } as ClipApiResponse;
+    act(() => root.render(<RegenerateDialog videoId="v1" clip={timed} totalClips={3} sourceDuration={110}
+      onClose={() => {}} onQueued={() => {}} />));
+    expect(host.textContent).toContain("Clip timing");
+    click("+15s");
+    expect(host.textContent).toContain("+8.0s after");
+    click("Regenerate clip");
+    await flush();
+    expect(regenerateClip).toHaveBeenCalledWith("c1", "both", { start_sec: 60, end_sec: 110 });
+  });
+
+  it("hides timing for text-only and sends no times when unchanged", async () => {
+    const timed = { ...clip, start_ms: 60_000, end_ms: 102_000 } as ClipApiResponse;
+    act(() => root.render(<RegenerateDialog videoId="v1" clip={timed} totalClips={3} sourceDuration={300}
+      onClose={() => {}} onQueued={() => {}} />));
+    click("New title, caption & tags");
+    expect(host.textContent).not.toContain("Clip timing");
+    click("Regenerate clip");
+    await flush();
+    expect(regenerateClip).toHaveBeenCalledWith("c1", "text", undefined);
   });
 });

@@ -1657,15 +1657,44 @@ async def search_games(
 _REGEN_READY_STATUSES = ("ready", "upload_failed", "failed")
 
 
+_MAX_CLIP_SEC = 600  # longest clip a re-cut may produce
+
+
 class RegenerateRequest(_BaseModel):
     mode: Literal["text", "render", "both"]
+    # Single clip only: re-cut from the original video at these times (seconds into the
+    # original), e.g. to include what comes after the clip's current end.
+    start_sec: float | None = Field(default=None, ge=0)
+    end_sec: float | None = Field(default=None, ge=0)
 
 
-def _queue_regenerate(tenant_id: str, video_id: str, clip_ids: list[str], mode: str) -> None:
-    _get_celery().send_task(
-        "workers.tasks.video.regenerate_clips",
-        args=[str(uuid.UUID(str(tenant_id))), video_id, clip_ids, mode],
-    )
+def _queue_regenerate(tenant_id: str, video_id: str, clip_ids: list[str], mode: str,
+                      timing: dict | None = None) -> None:
+    args = [str(uuid.UUID(str(tenant_id))), video_id, clip_ids, mode]
+    if timing:
+        args.append(timing)
+    _get_celery().send_task("workers.tasks.video.regenerate_clips", args=args)
+
+
+async def _regen_timing(db: AsyncSession, clip: Clip, body: RegenerateRequest) -> dict | None:
+    """Validate new start/end times for a re-cut; None when the clip keeps its times."""
+    if body.start_sec is None and body.end_sec is None:
+        return None
+    if body.mode == "text":
+        raise HTTPException(status_code=422, detail="Changing the clip's start or end needs a re-render.")
+    start = float(body.start_sec if body.start_sec is not None else (clip.start_sec or 0))
+    end = float(body.end_sec if body.end_sec is not None else (clip.end_sec or 0))
+    video = (await db.execute(select(Video).where(Video.id == clip.video_id))).scalar_one_or_none()
+    total = float(video.duration_sec) if video and video.duration_sec else None
+    if total is not None:
+        end = min(end, total)
+    if end - start < 1:
+        raise HTTPException(status_code=422, detail="The clip must be at least 1 second long.")
+    if end - start > _MAX_CLIP_SEC:
+        raise HTTPException(status_code=422, detail=f"Clips can be at most {_MAX_CLIP_SEC // 60} minutes long.")
+    if abs(start - float(clip.start_sec or 0)) < 0.05 and abs(end - float(clip.end_sec or 0)) < 0.05:
+        return None
+    return {"start": round(start, 2), "end": round(end, 2)}
 
 
 @router.post("/clips/{clip_id}/regenerate", response_model=ClipResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -1685,10 +1714,11 @@ async def regenerate_clip(
         raise HTTPException(status_code=404, detail="Clip not found.")
     if clip.status not in _REGEN_READY_STATUSES:
         raise HTTPException(status_code=409, detail=f"Clip is busy ({clip.status}); try again when it's ready.")
+    timing = await _regen_timing(db, clip, body)
     clip.status = "regenerating"
     await db.commit()
     await db.refresh(clip)
-    _queue_regenerate(token.tenant_id, str(clip.video_id), [str(clip.id)], body.mode)
+    _queue_regenerate(token.tenant_id, str(clip.video_id), [str(clip.id)], body.mode, timing)
     return clip
 
 

@@ -71,8 +71,35 @@ def _set_status(tenant_id: str, clip_id: str, status: str, error: str | None = N
         )
 
 
-def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: str) -> dict:
-    """Regenerate clips of one video in order. Returns {clip_id: "ok" | error}."""
+def _save_new_timing(tenant_id: str, clip_id: str, start: float, end: float, start_moved: bool) -> None:
+    """Store a re-cut clip's new place in the original video. Saved editor trims no
+    longer fit: a moved start shifts every editor timing, so those edits are dropped;
+    a moved end only invalidates the trim end."""
+    with _get_session(tenant_id) as session:
+        session.execute(
+            text("""
+                UPDATE clips
+                   SET start_sec = :s, end_sec = :e, start_ms = :sms, end_ms = :ems,
+                       duration_ms = :dur,
+                       metadata = CASE
+                           WHEN :moved THEN COALESCE(metadata, '{}'::jsonb) - 'editor'
+                           WHEN metadata ? 'editor'
+                             THEN jsonb_set(metadata, '{editor,trim_end_sec}', 'null'::jsonb)
+                           ELSE metadata END,
+                       updated_at = NOW()
+                 WHERE id = CAST(:id AS uuid)
+            """),
+            {"id": clip_id, "s": start, "e": end, "sms": int(start * 1000),
+             "ems": int(end * 1000), "dur": int((end - start) * 1000), "moved": start_moved},
+        )
+
+
+def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: str,
+                      timing: dict | None = None) -> dict:
+    """Regenerate clips of one video in order. Returns {clip_id: "ok" | error}.
+
+    `timing` ({"start", "end"} in seconds of the original video) re-cuts a single clip
+    at new times, e.g. to extend it past its current end."""
     if mode not in REGEN_MODES:
         raise ValueError(f"mode must be one of {REGEN_MODES}")
     from workers.tasks.video.ai import _batch_ai_content
@@ -128,8 +155,17 @@ def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
                     continue
                 cmeta = row.metadata or {}
                 signals = cmeta.get("signals") or {}
+                start, end = float(row.start_sec), float(row.end_sec)
+                if timing and mode != "text":
+                    if source_path is None:
+                        source_path = _fetch_source(tenant_id, video_id, vrow, work_dir, cfg)
+                        meta = _probe_video(source_path)
+                    start = max(0.0, float(timing["start"]))
+                    end = min(float(timing["end"]), float(meta.duration or timing["end"]))
+                    if end - start < 1:
+                        raise ValueError("the new start/end leave less than 1 second of video")
                 clip = ClipResult(
-                    start=float(row.start_sec), end=float(row.end_sec),
+                    start=start, end=end,
                     score=float(row.score or 0), title=row.title or "",
                     reason=cmeta.get("viral_reason", "") or "",
                     platform=row.platform or "tiktok",
@@ -188,6 +224,9 @@ def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
                 if not exported:
                     raise RuntimeError("render produced no clip")
                 _, clip_path = exported
+                if (start, end) != (float(row.start_sec), float(row.end_sec)):
+                    _save_new_timing(tenant_id, cid, start, end,
+                                     start_moved=abs(start - float(row.start_sec)) >= 0.05)
                 # Same hand-off as the pipeline: upload replaces the stored file and
                 # flips the clip back to "ready"; job_id = video id, like retry-upload.
                 upload_clip_to_storage.delay(cid, clip_path, tenant_id, video_id)
@@ -207,5 +246,6 @@ def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
 
 @celery_app.task(bind=True, name="workers.tasks.video.regenerate_clips",
                  time_limit=4 * 3600, soft_time_limit=4 * 3600 - 120)
-def regenerate_clips(self, tenant_id: str, video_id: str, clip_ids: list[str], mode: str) -> dict:
-    return _regenerate_clips(tenant_id, video_id, list(clip_ids), mode)
+def regenerate_clips(self, tenant_id: str, video_id: str, clip_ids: list[str], mode: str,
+                     timing: dict | None = None) -> dict:
+    return _regenerate_clips(tenant_id, video_id, list(clip_ids), mode, timing)

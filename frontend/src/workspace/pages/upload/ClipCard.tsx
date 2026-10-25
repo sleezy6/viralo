@@ -551,7 +551,7 @@ function DownloadMenu({ clip, onClose }: { clip: ClipApiResponse; onClose: () =>
 }
 
 /* ─── Clip card ─── */
-export function ClipCard({ clip, idx, selected = false, onToggleSelect, isPosted = false, isScheduled = false, posts = [], onOpen, totalClips = 1, onRegenerated }: {
+export function ClipCard({ clip, idx, selected = false, onToggleSelect, isPosted = false, isScheduled = false, posts = [], onOpen, totalClips = 1, onRegenerated, sourceDuration }: {
   clip: ClipApiResponse;
   idx: number;
   selected?: boolean;
@@ -564,6 +564,8 @@ export function ClipCard({ clip, idx, selected = false, onToggleSelect, isPosted
   totalClips?: number;
   /** Called after a regenerate job is queued, so the page can refresh and poll. */
   onRegenerated?: () => void;
+  /** Length of the original video in seconds, so Regenerate can extend the clip. */
+  sourceDuration?: number | null;
 }) {
   const [showEditor,     setShowEditor]     = useState(false);
   const [showDl,         setShowDl]         = useState(false);
@@ -658,6 +660,7 @@ export function ClipCard({ clip, idx, selected = false, onToggleSelect, isPosted
           videoId={localClip.video_id}
           clip={localClip}
           totalClips={totalClips}
+          sourceDuration={sourceDuration}
           onClose={() => setShowRegen(false)}
           onQueued={({ clip: updated }) => {
             if (updated) setLocalClip(updated);

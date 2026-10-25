@@ -512,8 +512,9 @@ export const videoApi = {
   /** "text" = new AI title/caption/tags, "render" = re-render, "both" = new text then re-render. */
   searchGames: (q: string) =>
     videoReq<SteamGameSuggestion[]>("GET", `/games/search?q=${encodeURIComponent(q)}`),
-  regenerateClip: (clipId: string, mode: RegenerateMode) =>
-    videoReq<ClipApiResponse>("POST", `/clips/${clipId}/regenerate`, { mode }),
+  /** `timing` re-cuts the clip from the original video at new times (seconds), e.g. to extend it. */
+  regenerateClip: (clipId: string, mode: RegenerateMode, timing?: { start_sec: number; end_sec: number }) =>
+    videoReq<ClipApiResponse>("POST", `/clips/${clipId}/regenerate`, { mode, ...(timing ?? {}) }),
   regenerateVideoClips: (videoId: string, mode: RegenerateMode) =>
     videoReq<{ queued: number; clip_ids: string[]; mode: RegenerateMode }>("POST", `/videos/${videoId}/regenerate`, { mode }),
   upscaleClip: (clipId: string, targetResolution: "1080p" | "4K" = "4K") =>

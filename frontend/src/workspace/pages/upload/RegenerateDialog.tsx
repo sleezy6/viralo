@@ -17,6 +17,75 @@ export const CLIP_BUSY_STATUSES = ["regenerating", "pending_upload", "uploading"
 
 export type RegenerateScope = "this" | "all";
 
+function fmtTime(sec: number): string {
+  const s = Math.max(0, sec);
+  const m = Math.floor(s / 60);
+  return `${m}:${(s - m * 60).toFixed(1).padStart(4, "0")}`;
+}
+
+/** Start/end of the clip in the original video, with nudge buttons to extend it. */
+function ClipTiming({ start, end, origStart, origEnd, max, onChange }: {
+  start: number; end: number; origStart: number; origEnd: number; max: number | null;
+  onChange: (start: number, end: number) => void;
+}) {
+  const clampEnd = (v: number) => Math.max(start + 1, max ? Math.min(v, max) : v);
+  const clampStart = (v: number) => Math.min(Math.max(0, v), end - 1);
+  const nudge = (label: string, fn: () => void, disabled: boolean) => (
+    <button type="button" onClick={fn} disabled={disabled}
+      className="rounded-[7px] border border-c-border bg-surface-2 px-2 py-1 font-mono text-[11.5px] font-semibold text-c-text-secondary transition hover:border-c-border-hover hover:text-c-text disabled:opacity-40">
+      {label}
+    </button>
+  );
+  const diff = (d: number, where: string) =>
+    Math.abs(d) < 0.05 ? null : `${d > 0 ? "+" : "−"}${Math.abs(d).toFixed(1)}s ${where}`;
+  const notes = [diff(origStart - start, "before"), diff(end - origEnd, "after")].filter(Boolean);
+  const total = max && max > 0 ? max : null;
+  return (
+    <div className="mb-5">
+      <div className="mb-2 flex items-baseline text-[10.5px] font-bold uppercase tracking-[.1em] text-c-text-muted">
+        Clip timing
+        {total && <span className="ml-auto font-mono normal-case tracking-normal">video {fmtTime(total)}</span>}
+      </div>
+      {total && (
+        <div className="relative mb-3 h-2 rounded-full bg-surface-3" aria-hidden>
+          <div className="absolute inset-y-0 rounded-full bg-c-text-muted/40"
+            style={{ left: `${(origStart / total) * 100}%`, width: `${((origEnd - origStart) / total) * 100}%` }} />
+          <div className="absolute inset-y-0 rounded-full border border-[#ff3d6a] bg-[#ff3d6a]/40"
+            style={{ left: `${(start / total) * 100}%`, width: `${(Math.max(0, end - start) / total) * 100}%` }} />
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-3">
+        {([
+          ["Start", start, (v: number) => onChange(clampStart(v), end),
+            [["−5s", () => onChange(clampStart(start - 5), end), start <= 0],
+             ["+5s", () => onChange(clampStart(start + 5), end), start >= end - 1]]],
+          ["End", end, (v: number) => onChange(start, clampEnd(v)),
+            [["−5s", () => onChange(start, clampEnd(end - 5)), end <= start + 1],
+             ["+5s", () => onChange(start, clampEnd(end + 5)), !!max && end >= max],
+             ["+15s", () => onChange(start, clampEnd(end + 15)), !!max && end >= max]]],
+        ] as const).map(([label, val, set, btns]) => (
+          <div key={label}>
+            <label className="mb-1 block text-[11.5px] text-c-text-muted">
+              {label} <span className="font-mono">{fmtTime(val)}</span>
+            </label>
+            <input type="number" step="0.5" min={0} max={max ?? undefined} aria-label={`${label} (seconds)`}
+              value={Number(val.toFixed(2))}
+              onChange={(e) => { const v = parseFloat(e.target.value); if (!Number.isNaN(v)) set(v); }}
+              className="mb-1.5 w-full rounded-[8px] border border-c-border bg-surface-2 px-2.5 py-1.5 font-mono text-[12.5px] text-c-text outline-none focus:border-[#ff3d6a]/50" />
+            <div className="flex flex-wrap gap-1.5">{btns.map(([l, fn, dis]) => <span key={l}>{nudge(l, fn, dis)}</span>)}</div>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-[11.5px] leading-snug text-c-text-muted">
+        {notes.length
+          ? <>New length {fmtTime(end - start)} ({notes.join(", ")}).{" "}
+              <button type="button" onClick={() => onChange(origStart, origEnd)} className="underline hover:text-c-text">Reset</button></>
+          : "Times are in the original video. Move the end later to include what comes after the clip."}
+      </p>
+    </div>
+  );
+}
+
 /**
  * Regenerate one clip or every clip of a video.
  * With `clip`, the dialog offers "This clip" / "All clips"; without it, all clips only.
@@ -25,6 +94,7 @@ export function RegenerateDialog({
   videoId,
   clip,
   totalClips,
+  sourceDuration,
   defaultScope = clip ? "this" : "all",
   onClose,
   onQueued,
@@ -32,6 +102,8 @@ export function RegenerateDialog({
   videoId: string;
   clip?: ClipApiResponse;
   totalClips: number;
+  /** Original video length (seconds): the furthest a clip can be extended. */
+  sourceDuration?: number | null;
   defaultScope?: RegenerateScope;
   onClose: () => void;
   /** Called once the server accepted the job; `clip` is the updated clip for scope "this". */
@@ -41,13 +113,19 @@ export function RegenerateDialog({
   const [scope, setScope] = useState<RegenerateScope>(clip ? defaultScope : "all");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const origStart = clip?.start_ms != null ? clip.start_ms / 1000 : null;
+  const origEnd = clip?.end_ms != null ? clip.end_ms / 1000 : null;
+  const [timing, setTiming] = useState({ start: origStart ?? 0, end: origEnd ?? 0 });
+  const canRetime = !!clip && scope === "this" && mode !== "text" && origStart != null && origEnd != null;
+  const retimed = canRetime && (Math.abs(timing.start - origStart!) >= 0.05 || Math.abs(timing.end - origEnd!) >= 0.05);
 
   async function submit() {
     setBusy(true);
     setError("");
     try {
       if (scope === "this" && clip) {
-        const updated = await videoApi.regenerateClip(clip.id, mode);
+        const updated = await videoApi.regenerateClip(
+          clip.id, mode, retimed ? { start_sec: timing.start, end_sec: timing.end } : undefined);
         onQueued({ scope, mode, clip: updated, queued: 1 });
       } else {
         const res = await videoApi.regenerateVideoClips(videoId, mode);
@@ -68,7 +146,7 @@ export function RegenerateDialog({
       style={{ background: "rgba(4,7,15,.8)", backdropFilter: "blur(6px)", animation: "fadeUp .15s ease" }}
       onClick={(e) => e.target === e.currentTarget && !busy && onClose()}>
       <div role="dialog" aria-modal="true" aria-labelledby="regen-title"
-        className="w-full max-w-[460px] overflow-hidden rounded-[18px] border border-c-border bg-surface-1 p-4 shadow-[0_40px_100px_rgba(0,0,0,.7)] sm:rounded-[20px] sm:p-6"
+        className="max-h-[calc(100dvh-24px)] w-full max-w-[460px] overflow-y-auto rounded-[18px] border border-c-border bg-surface-1 p-4 shadow-[0_40px_100px_rgba(0,0,0,.7)] sm:rounded-[20px] sm:p-6"
         style={{ animation: "fadeUp .2s cubic-bezier(.22,.8,.4,1)" }}
         onClick={(e) => e.stopPropagation()}>
         <div className="mb-5 flex items-center gap-3">
@@ -115,6 +193,11 @@ export function RegenerateDialog({
               ))}
             </div>
           </>
+        )}
+
+        {canRetime && (
+          <ClipTiming start={timing.start} end={timing.end} origStart={origStart!} origEnd={origEnd!}
+            max={sourceDuration ?? null} onChange={(start, end) => setTiming({ start, end })} />
         )}
 
         {mode !== "text" && (

@@ -545,6 +545,7 @@ export function ResultsView({
                 onOpen={() => setDetailClip(c)}
                 totalClips={clips.length}
                 onRegenerated={refreshClips}
+                sourceDuration={video.duration_sec}
               />
             )}
           />
