@@ -1,6 +1,7 @@
 # Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): colour emoji in
 # burned-in captions and hook titles (Noto Color Emoji sprites, silhouettes for
 # outlines); hook red circle only for templates with "hook_circle" (sports).
+# Caption/hook text aligned inside its boxes and pills; hook title fits the frame.
 """
 Video processing pipeline — ClipForge-based.
 PyAV for video I/O (no ffmpeg needed for clip export/audio).
@@ -320,23 +321,41 @@ def _text_width_mixed(draw, text: str, size: int) -> float:
     return total
 
 
+@_lru_cache(maxsize=256)
+def _cap_metrics(size: int) -> tuple[int, int]:
+    """(top offset, height) of a capital letter at this size. Pillow draws text from the
+    top of the line box, which sits above the visible letters by `top`."""
+    try:
+        bb = _load_font_cached(size).getbbox("H")
+        return int(bb[1]), max(1, int(bb[3] - bb[1]))
+    except Exception:
+        return 0, max(1, int(size * 0.72))
+
+
 def _draw_text_mixed(draw, xy, text: str, size: int, fill, silhouette: bool = False):
-    """Draw text with per-character font fallback. Emojis are drawn in colour, or as a
-    solid silhouette in `fill` for outline/shadow passes (stamping a colour emoji at
-    dozens of offsets would smear it instead of outlining it)."""
+    """Draw text with per-character font fallback, with the top of the letters at y.
+
+    Callers size background boxes and pills from textbbox (the visible letters), so
+    drawing from the line-box top left text sitting low in its box. Shifting by one
+    cap-height offset per size (not per word) keeps a whole row on one baseline.
+    Emojis are drawn in colour, or as a solid silhouette in `fill` for outline/shadow
+    passes (stamping a colour emoji at dozens of offsets would smear it)."""
     x, y = xy
+    cap_top, cap_h = _cap_metrics(size)
+    text_y = y - cap_top
     base = getattr(draw, "_image", None)
     for run, is_emoji in _split_emoji_runs(text):
         if is_emoji and base is not None:
             fill_t = tuple(fill) if isinstance(fill, (tuple, list)) else (255, 255, 255, 255)
             sprite = _emoji_silhouette(run, size, fill_t) if silhouette else _emoji_sprite(run, size)
             if sprite is not None:
-                base.paste(sprite, (int(x), int(y + size * 0.08)), sprite)
+                # centre the emoji on the capital letters
+                base.paste(sprite, (int(x), int(y + cap_h / 2 - sprite.height / 2)), sprite)
                 x += sprite.width
                 continue
         for ch in run:
             f = _load_font_for_char(ch, size)
-            draw.text((x, y), ch, font=f, fill=fill)
+            draw.text((x, text_y), ch, font=f, fill=fill)
             x += draw.textlength(ch, font=f)
 
 
@@ -811,8 +830,12 @@ def _draw_hook_overlay(img, t_in_clip: float, hook_text: str, hook_duration_sec:
         return img
 
     font_size = max(48, int(width * 0.062))
-    font = _load_font(font_size)
     draw = ImageDraw.Draw(img)
+    PAD = 16
+    # Shrink until the title (and its box) fits the frame instead of running off the edges.
+    while font_size > 24 and _text_width_mixed(draw, hook_text, font_size) + 2 * PAD > width * 0.94:
+        font_size = int(font_size * 0.92)
+    font = _load_font(font_size)
 
     bbox = draw.textbbox((0, 0), hook_text, font=font)
     th = bbox[3] - bbox[1]
@@ -820,7 +843,6 @@ def _draw_hook_overlay(img, t_in_clip: float, hook_text: str, hook_duration_sec:
     x = (width - tw) // 2
     y = int(height * 0.055)
 
-    PAD = 16
     bg = (0, 0, 0, int(alpha * 0.72))
     draw.rounded_rectangle([x - PAD, y - PAD // 2, x + tw + PAD, y + th + PAD // 2], radius=10, fill=bg)
 
