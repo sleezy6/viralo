@@ -397,6 +397,8 @@ def _build_caption_timeline(segments: list[CaptionSegment], style: str) -> dict:
     timeline = {}
     is_capcut = style in CAPCUT_STYLES
     for seg in segments:
+        color = getattr(seg, "color", None)
+        extra = (color,) if color else ()  # speaker colour, only when set
         if is_capcut and seg.words:
             words = [w.word for w in seg.words]
             n = len(seg.words)
@@ -406,10 +408,10 @@ def _build_caption_timeline(segments: list[CaptionSegment], style: str) -> dict:
                 if t_end - t_start < 0.12:
                     t_end = t_start + 0.12
                 for cs in range(int(t_start * 100), int(t_end * 100) + 1):
-                    timeline[cs] = (list(words), i, getattr(seg, "color", None))
+                    timeline[cs] = (list(words), i) + extra
         else:
             for cs in range(int(seg.start * 100), int(seg.end * 100) + 1):
-                timeline[cs] = (seg.text, None, getattr(seg, "color", None))
+                timeline[cs] = (seg.text, None) + extra
     return timeline
 
 
