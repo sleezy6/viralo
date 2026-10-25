@@ -1,3 +1,5 @@
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): optional
+# self-hosted Whisper backend (LOCAL_STT_*) tried before Groq.
 """
 Video processing pipeline — ClipForge-based.
 PyAV for video I/O (no ffmpeg needed for clip export/audio).
@@ -172,26 +174,28 @@ def _parse_words(response, offset: float) -> list[WordTimestamp]:
     return words
 
 
-def _translate_chunk(groq_client, audio_bytes: bytes, filename: str, offset: float) -> list[WordTimestamp]:
+def _translate_chunk(groq_client, audio_bytes: bytes, filename: str, offset: float,
+                     model: str = "whisper-large-v3") -> list[WordTimestamp]:
     """Whisper translate task: transcribes AND translates any spoken language to English.
     Word-level timestamps are not supported on the translations endpoint, so timings
     come from _parse_words' segment fallback (char-proportional split)."""
     response = groq_client.audio.translations.create(
         file=(filename, audio_bytes),
         # translate task requires the full model — turbo variants only transcribe
-        model="whisper-large-v3",
+        model=model,
         response_format="verbose_json",
     )
     return _parse_words(response, offset)
 
 
-def _transcribe_chunk(groq_client, audio_bytes: bytes, filename: str, offset: float, language: str) -> tuple[list[WordTimestamp], str]:
+def _transcribe_chunk(groq_client, audio_bytes: bytes, filename: str, offset: float, language: str,
+                      model: str = GROQ_WHISPER_MODEL) -> tuple[list[WordTimestamp], str]:
     """Returns (words, detected_language). detected_language is ISO 639-1 or empty string."""
     detected_lang = ""
     try:
         response = groq_client.audio.transcriptions.create(
             file=(filename, audio_bytes),
-            model=GROQ_WHISPER_MODEL,
+            model=model,
             language=language if language != "auto" else None,
             response_format="verbose_json",
             timestamp_granularities=["word", "segment"],
@@ -201,7 +205,7 @@ def _transcribe_chunk(groq_client, audio_bytes: bytes, filename: str, offset: fl
         try:
             response = groq_client.audio.transcriptions.create(
                 file=(filename, audio_bytes),
-                model=GROQ_WHISPER_MODEL,
+                model=model,
                 language=language if language != "auto" else None,
                 response_format="json",
             )
@@ -230,23 +234,21 @@ def _transcribe(source_path: str, duration: float, language: str = "auto",
     translate_to_english: when the detected spoken language is not English (Hindi,
     Nepali, Chinese, ...), re-run the audio through Whisper's translate task so
     burned captions are always English."""
-    from groq import Groq, RateLimitError as GroqRateLimitError
-
-    groq_keys: list[str] = []
-    for env in ["GROQ_API_KEY"] + [f"GROQ_API_KEY_{i}" for i in range(2, 20)]:
-        k = os.getenv(env, "")
-        if k and k not in groq_keys:
-            groq_keys.append(k)
-
-    if not groq_keys:
+    backends = _stt_backends()
+    if not backends:
         return [], ""
+
+    try:
+        from groq import RateLimitError as GroqRateLimitError
+    except ImportError:  # groq SDK absent: no Groq backends either, so nothing to catch
+        class GroqRateLimitError(Exception):
+            pass
 
     audio_chunks = _prepare_audio_chunks(source_path, duration)
     last_exc: Exception | None = None
 
-    for key_idx, groq_key in enumerate(groq_keys):
-        client = Groq(api_key=groq_key)
-        label = "GROQ_API_KEY" if key_idx == 0 else f"GROQ_API_KEY_{key_idx + 1}"
+    for b in backends:
+        client, label = b["client"], b["label"]
         try:
             all_words: list[WordTimestamp] = []
             detected_lang = ""
@@ -254,9 +256,9 @@ def _transcribe(source_path: str, duration: float, language: str = "auto",
             for i, (audio_bytes, offset) in enumerate(audio_chunks):
                 fname = f"audio_chunk_{i}.mp3"
                 if translating:
-                    all_words.extend(_translate_chunk(client, audio_bytes, fname, offset))
+                    all_words.extend(_translate_chunk(client, audio_bytes, fname, offset, b["translate_model"]))
                     continue
-                words, chunk_lang = _transcribe_chunk(client, audio_bytes, fname, offset, language)
+                words, chunk_lang = _transcribe_chunk(client, audio_bytes, fname, offset, language, b["model"])
                 # Use first chunk's detected language (most reliable — full audio context)
                 if not detected_lang and chunk_lang:
                     detected_lang = chunk_lang
@@ -265,7 +267,7 @@ def _transcribe(source_path: str, duration: float, language: str = "auto",
                 if (i == 0 and translate_to_english
                         and detected_lang and detected_lang.lower() not in _ENGLISH_LANGS):
                     try:
-                        all_words.extend(_translate_chunk(client, audio_bytes, fname, offset))
+                        all_words.extend(_translate_chunk(client, audio_bytes, fname, offset, b["translate_model"]))
                         translating = True
                         logging.info(f"[Whisper] '{detected_lang}' speech — translating captions to English")
                         continue
@@ -284,6 +286,12 @@ def _transcribe(source_path: str, duration: float, language: str = "auto",
                         seen.add(k)
                 all_words = deduped
 
+            if not all_words and b["local"]:
+                # _transcribe_chunk swallows errors and returns no words; treat that as a
+                # local failure so a configured Groq key still gets a chance.
+                logging.warning(f"[Whisper] {label} returned no words — falling back")
+                continue
+
             logging.info(f"[Whisper] Transcribed {len(all_words)} words via {label} (language={detected_lang or 'unknown'})")
             return all_words, detected_lang
 
@@ -294,10 +302,55 @@ def _transcribe(source_path: str, duration: float, language: str = "auto",
         except Exception as e:
             logging.warning(f"[Whisper] {label} failed: {str(e)[:120]}")
             last_exc = e
+            if b["local"]:
+                continue  # fall back to Groq if configured
             break
 
-    logging.error(f"[Whisper] All Groq keys exhausted. Last error: {last_exc}")
+    logging.error(f"[Whisper] All transcription backends failed. Last error: {last_exc}")
     return [], ""
+
+
+def _stt_backends() -> list[dict]:
+    """Transcription backends in order: a self-hosted OpenAI-compatible server first
+    (e.g. Unsloth with a Whisper model loaded), then each configured Groq key."""
+    backends: list[dict] = []
+
+    base_url = os.getenv("LOCAL_STT_BASE_URL", "").strip()
+    model = os.getenv("LOCAL_STT_MODEL", "").strip()
+    if base_url and model:
+        from openai import OpenAI
+        from shared.llm import _normalize_v1
+        try:
+            timeout = float(os.getenv("LOCAL_STT_TIMEOUT", "900") or 900)
+        except ValueError:
+            timeout = 900.0
+        api_key = (os.getenv("LOCAL_STT_API_KEY", "").strip()
+                   or os.getenv("LOCAL_LLM_API_KEY", "").strip() or "local")
+        backends.append({
+            "label": f"local ({model})",
+            "client": OpenAI(api_key=api_key, base_url=_normalize_v1(base_url),
+                             timeout=timeout, max_retries=0),
+            "model": model,
+            "translate_model": model,
+            "local": True,
+        })
+
+    groq_keys: list[str] = []
+    for env in ["GROQ_API_KEY"] + [f"GROQ_API_KEY_{i}" for i in range(2, 20)]:
+        k = os.getenv(env, "")
+        if k and k not in groq_keys:
+            groq_keys.append(k)
+    if groq_keys:
+        from groq import Groq
+        for key_idx, groq_key in enumerate(groq_keys):
+            backends.append({
+                "label": "GROQ_API_KEY" if key_idx == 0 else f"GROQ_API_KEY_{key_idx + 1}",
+                "client": Groq(api_key=groq_key),
+                "model": GROQ_WHISPER_MODEL,
+                "translate_model": "whisper-large-v3",
+                "local": False,
+            })
+    return backends
 
 
 # ── LLM helpers: multi-provider fallback ─────────────────────────────────────

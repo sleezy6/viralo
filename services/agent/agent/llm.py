@@ -1,3 +1,5 @@
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): pass
+# self-hosted provider timeouts through to the agent's models.
 import logging
 import os
 
@@ -60,7 +62,7 @@ def get_llm_with_fallback() -> BaseChatModel:
 
     Hierarchy: Groq → Cloudflare AI → Cerebras → OpenRouter → SambaNova → Groq-small
     """
-    from shared.llm import _get_providers, _resolve_provider, _probe
+    from shared.llm import _get_providers, _resolve_provider, _probe, _probe_timeout
 
     models: list[BaseChatModel] = []
 
@@ -70,12 +72,12 @@ def get_llm_with_fallback() -> BaseChatModel:
             continue
 
         model = p["model_large"]
-        if not _probe(api_key, base_url, model, p["json_mode"]):
+        if not _probe(api_key, base_url, model, p["json_mode"], timeout=_probe_timeout(p)):
             log.warning(f"[LLM-agent] {p['name']} probe failed — skipping")
             continue
 
         try:
-            lc_model = _build_langchain_model(p["name"], api_key, base_url, model)
+            lc_model = _build_langchain_model(p["name"], api_key, base_url, model, timeout=p.get("timeout"))
             if lc_model:
                 log.info(f"[LLM-agent] Added to fallback chain: {p['name']} / {model}")
                 models.append(lc_model)
@@ -96,19 +98,22 @@ def get_llm_with_fallback() -> BaseChatModel:
     return primary.with_fallbacks(fallbacks, exceptions_to_handle=(Exception,))
 
 
-def _build_langchain_model(name: str, api_key: str, base_url: str, model: str) -> BaseChatModel | None:
+def _build_langchain_model(name: str, api_key: str, base_url: str, model: str,
+                           timeout: float | None = None) -> BaseChatModel | None:
     """Build a LangChain model for the given provider. All providers use ChatOpenAI-compatible interface."""
     if name in ("groq", "groq-small"):
         from langchain_groq import ChatGroq
         return ChatGroq(model=model, api_key=api_key, streaming=True)
 
-    # Cerebras, OpenRouter, SambaNova, Cloudflare — all OpenAI-compatible
+    # Cerebras, OpenRouter, SambaNova, Cloudflare, self-hosted — all OpenAI-compatible
     from langchain_openai import ChatOpenAI
+    extra = {"timeout": timeout, "max_retries": 0} if timeout else {}
     return ChatOpenAI(
         model=model,
         api_key=api_key,
         base_url=base_url,
         streaming=True,
+        **extra,
     )
 
 

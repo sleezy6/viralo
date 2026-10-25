@@ -1,3 +1,6 @@
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): added optional
+# self-hosted OpenAI-compatible provider (LOCAL_LLM_*), per-provider timeouts,
+# and <think> block stripping in JSON parsing.
 """
 Global free-tier LLM fallback utility.
 
@@ -129,6 +132,39 @@ _BASE_PROVIDERS = [
         "json_mode": False,
     },
 ]
+
+
+def _normalize_v1(url: str) -> str:
+    """Accept http://host:port or http://host:port/v1 — always return the /v1 base."""
+    url = url.strip().rstrip("/")
+    return url if url.endswith("/v1") else url + "/v1"
+
+
+def _local_provider() -> dict | None:
+    """Self-hosted OpenAI-compatible server (e.g. Unsloth `unsloth run`, llama.cpp, Ollama).
+
+    Enabled when LOCAL_LLM_BASE_URL and LOCAL_LLM_MODEL are set; always tried first.
+    Local generation is much slower than hosted APIs, so it gets its own timeout.
+    """
+    base_url = os.getenv("LOCAL_LLM_BASE_URL", "").strip()
+    model = os.getenv("LOCAL_LLM_MODEL", "").strip()
+    if not base_url or not model:
+        return None
+    try:
+        timeout = float(os.getenv("LOCAL_LLM_TIMEOUT", "300") or 300)
+    except ValueError:
+        timeout = 300.0
+    return {
+        "name": "local",
+        "env_key": "LOCAL_LLM_API_KEY",
+        # Servers started without auth still need a non-empty key for the OpenAI client.
+        "_api_key_override": os.getenv("LOCAL_LLM_API_KEY", "").strip() or "local",
+        "base_url": _normalize_v1(base_url),
+        "model_large": model,
+        "model_small": model,
+        "json_mode": os.getenv("LOCAL_LLM_JSON_MODE", "false").strip().lower() in ("1", "true", "yes"),
+        "timeout": timeout,
+    }
 
 
 def _build_groq_slots() -> list[dict]:
@@ -270,6 +306,12 @@ def _get_providers() -> list[dict]:
         remaining = [p for p in providers if p["name"] not in {p2["name"] for p2 in pinned}]
         providers = pinned + remaining
 
+    # A configured self-hosted server always goes first (after any reordering above);
+    # hosted providers remain as fallbacks only if their keys are set.
+    local = _local_provider()
+    if local and "local" not in disabled:
+        providers = [local] + [p for p in providers if p["name"] != "local"]
+
     return providers
 
 # ---------------------------------------------------------------------------
@@ -292,7 +334,8 @@ _PROBE_CACHE_LIVE_TTL = float(os.getenv("LLM_PROBE_LIVE_TTL", "30"))   # re-prob
 _PROBE_CACHE_DEAD_TTL = float(os.getenv("LLM_PROBE_DEAD_TTL", "180"))  # skip dead providers
 
 
-def _probe_cached(name: str, api_key: str, base_url: str, model: str, json_mode: bool, azure: bool = False) -> bool:
+def _probe_cached(name: str, api_key: str, base_url: str, model: str, json_mode: bool, azure: bool = False,
+                  timeout: float = 8.0) -> bool:
     """_probe with TTL cache. Dead providers skip real HTTP for 60s, live for 30s."""
     import time
     now = time.monotonic()
@@ -305,7 +348,7 @@ def _probe_cached(name: str, api_key: str, base_url: str, model: str, json_mode:
                     log.debug(f"[LLM] {name}: cached DEAD (skip)")
                 return alive
 
-    result = _probe(api_key, base_url, model, json_mode, azure=azure)
+    result = _probe(api_key, base_url, model, json_mode, timeout=timeout, azure=azure)
     ttl = _PROBE_CACHE_LIVE_TTL if result else _PROBE_CACHE_DEAD_TTL
     with _probe_cache_lock:
         _probe_cache[name] = (result, now + ttl)
@@ -349,7 +392,9 @@ LLM_PROVIDERS = _get_providers()
 
 def _parse_json(content: str) -> dict:
     """Parse JSON from LLM response, stripping markdown fences if present."""
-    content = content.strip()
+    # Reasoning models (common when self-hosted) may prefix their answer with a
+    # <think>…</think> block; drop it so braces inside it can't confuse parsing.
+    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
     if content.startswith("```"):
         content = re.sub(r"^```[a-z]*\n?", "", content)
         content = re.sub(r"\n?```$", "", content.strip())
@@ -360,6 +405,11 @@ def _parse_json(content: str) -> dict:
         if match:
             return json.loads(match.group())
         raise
+
+
+def _probe_timeout(p: dict) -> float:
+    """Health-check timeout: 8s for hosted APIs; local servers may need to load the model first."""
+    return min(p["timeout"], 120.0) if "timeout" in p else 8.0
 
 
 def _make_client(api_key: str, base_url: str, max_retries: int = 2, timeout: float = 15.0, azure: bool = False):
@@ -434,7 +484,8 @@ def probe_all_providers(prefer_large: bool = True) -> list[dict]:
             results.append({"name": p["name"], "model": "—", "status": "skip"})
             continue
         model = p["model_large"] if prefer_large else p["model_small"]
-        ok = _probe_cached(p["name"], api_key, base_url, model, p["json_mode"], azure=p.get("_azure", False))
+        ok = _probe_cached(p["name"], api_key, base_url, model, p["json_mode"], azure=p.get("_azure", False),
+                           timeout=_probe_timeout(p))
         status = "ok" if ok else "fail"
         log.info(f"[LLM probe] {p['name']} ({model}): {status.upper()}")
         results.append({"name": p["name"], "model": model, "status": status})
@@ -480,12 +531,17 @@ def call_llm_json(
             model = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4o")
 
         # Probe with cache — dead providers skipped in <1ms after first failure
-        if not _probe_cached(name, api_key, base_url, model, p["json_mode"], azure=is_azure):
+        if not _probe_cached(name, api_key, base_url, model, p["json_mode"], azure=is_azure,
+                             timeout=_probe_timeout(p)):
             log.warning(f"[LLM] {name} ({model}): probe FAILED — trying next provider")
             attempts.append(f"{name}:probe-fail")
             continue
 
-        client = _make_client(api_key, base_url, azure=is_azure)
+        if "timeout" in p:
+            # Local: one long attempt beats retrying a request the GPU is still working on.
+            client = _make_client(api_key, base_url, max_retries=0, timeout=p["timeout"], azure=is_azure)
+        else:
+            client = _make_client(api_key, base_url, azure=is_azure)
         log.info(f"[LLM] Active provider: {name} / {model}")
         if notify:
             try:

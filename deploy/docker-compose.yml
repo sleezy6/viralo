@@ -1,12 +1,17 @@
 # Viralo for a NAS (UGREEN, Synology, Portainer...) — pulls prebuilt images,
 # nothing is built on the NAS. Images come from .github/workflows/publish-images.yml
-# in github.com/sleezy6/viralo.
+# in github.com/sleezy6/viralo (fork of sammyview80/viralo, Apache-2.0).
 #
-# Set these variables in your Docker app's environment section (or a .env file
-# next to this one): POSTGRES_PASSWORD, RABBITMQ_PASS, SECRET_KEY, ENCRYPTION_KEY,
-# ADMIN_JWT_SECRET, WEBSUB_SECRET, plus at least one AI key (e.g. OPENAI_API_KEY).
+# Required variables (Docker app's environment section, or a .env next to this file):
+#   POSTGRES_PASSWORD, RABBITMQ_PASS, SECRET_KEY, ENCRYPTION_KEY, ADMIN_JWT_SECRET, WEBSUB_SECRET
+#
+# AI — pick one or both:
+#   Self-hosted (e.g. Unsloth `unsloth run`): LOCAL_LLM_BASE_URL (http://<pc-ip>:<port>),
+#     LOCAL_LLM_API_KEY, LOCAL_LLM_MODEL (an id from /v1/models). Optional local
+#     speech-to-text: LOCAL_STT_BASE_URL, LOCAL_STT_MODEL (+ LOCAL_STT_API_KEY).
+#   Hosted free tiers: GROQ_API_KEY (also does transcription), OPENROUTER_API_KEY, ...
+#
 # Optional: FRONTEND_URL (e.g. http://192.168.1.50:3000), VIRALO_PORT (default 3000).
-#
 # Open http://<nas-ip>:3000 when it's up. YouTube cookies are intentionally off.
 name: viralo
 services:
@@ -141,6 +146,15 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_PORT: ${SMTP_PORT:-587}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_STT_BASE_URL: ${LOCAL_STT_BASE_URL:-}
+      LOCAL_STT_API_KEY: ${LOCAL_STT_API_KEY:-}
+      LOCAL_STT_MODEL: ${LOCAL_STT_MODEL:-}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
+      LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
+      LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
   gateway:
     image: ghcr.io/sleezy6/viralo-gateway:latest
     restart: unless-stopped
@@ -212,6 +226,15 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_PORT: ${SMTP_PORT:-587}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_STT_BASE_URL: ${LOCAL_STT_BASE_URL:-}
+      LOCAL_STT_API_KEY: ${LOCAL_STT_API_KEY:-}
+      LOCAL_STT_MODEL: ${LOCAL_STT_MODEL:-}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
+      LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
+      LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
   video-service:
     image: ghcr.io/sleezy6/viralo-video:latest
     networks:
@@ -260,6 +283,15 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_PORT: ${SMTP_PORT:-587}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_STT_BASE_URL: ${LOCAL_STT_BASE_URL:-}
+      LOCAL_STT_API_KEY: ${LOCAL_STT_API_KEY:-}
+      LOCAL_STT_MODEL: ${LOCAL_STT_MODEL:-}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
+      LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
+      LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       YTDLP_COOKIES_FILE: ''
       YTDLP_PROXY: ${YTDLP_PROXY:-}
       YTDLP_PROXY_LIST: ${YTDLP_PROXY_LIST:-}
@@ -346,6 +378,15 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_PORT: ${SMTP_PORT:-587}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_STT_BASE_URL: ${LOCAL_STT_BASE_URL:-}
+      LOCAL_STT_API_KEY: ${LOCAL_STT_API_KEY:-}
+      LOCAL_STT_MODEL: ${LOCAL_STT_MODEL:-}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
+      LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
+      LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
   workflow-service:
     image: ghcr.io/sleezy6/viralo-workflow:latest
     networks:
@@ -409,6 +450,15 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_PORT: ${SMTP_PORT:-587}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_STT_BASE_URL: ${LOCAL_STT_BASE_URL:-}
+      LOCAL_STT_API_KEY: ${LOCAL_STT_API_KEY:-}
+      LOCAL_STT_MODEL: ${LOCAL_STT_MODEL:-}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
+      LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
+      LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
   platform-service:
     image: ghcr.io/sleezy6/viralo-platform:latest
     networks:
@@ -472,6 +522,15 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_PORT: ${SMTP_PORT:-587}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_STT_BASE_URL: ${LOCAL_STT_BASE_URL:-}
+      LOCAL_STT_API_KEY: ${LOCAL_STT_API_KEY:-}
+      LOCAL_STT_MODEL: ${LOCAL_STT_MODEL:-}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
+      LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
+      LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
   bgutil-pot:
     image: brainicism/bgutil-ytdlp-pot-provider:1.3.1
     restart: unless-stopped
@@ -538,6 +597,15 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_PORT: ${SMTP_PORT:-587}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_STT_BASE_URL: ${LOCAL_STT_BASE_URL:-}
+      LOCAL_STT_API_KEY: ${LOCAL_STT_API_KEY:-}
+      LOCAL_STT_MODEL: ${LOCAL_STT_MODEL:-}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
+      LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
+      LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       YTDLP_COOKIES_FILE: ''
       YTDLP_PROXY: ${YTDLP_PROXY:-}
       YTDLP_PROXY_LIST: ${YTDLP_PROXY_LIST:-}
@@ -611,6 +679,15 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_PORT: ${SMTP_PORT:-587}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_STT_BASE_URL: ${LOCAL_STT_BASE_URL:-}
+      LOCAL_STT_API_KEY: ${LOCAL_STT_API_KEY:-}
+      LOCAL_STT_MODEL: ${LOCAL_STT_MODEL:-}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
+      LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
+      LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       YTDLP_COOKIES_FILE: ''
       YTDLP_PROXY: ${YTDLP_PROXY:-}
       YTDLP_PROXY_LIST: ${YTDLP_PROXY_LIST:-}
@@ -684,6 +761,15 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_PORT: ${SMTP_PORT:-587}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_STT_BASE_URL: ${LOCAL_STT_BASE_URL:-}
+      LOCAL_STT_API_KEY: ${LOCAL_STT_API_KEY:-}
+      LOCAL_STT_MODEL: ${LOCAL_STT_MODEL:-}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
+      LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
+      LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       YTDLP_COOKIES_FILE: ''
       YTDLP_PROXY: ${YTDLP_PROXY:-}
       YTDLP_PROXY_LIST: ${YTDLP_PROXY_LIST:-}
@@ -757,6 +843,15 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_PORT: ${SMTP_PORT:-587}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_STT_BASE_URL: ${LOCAL_STT_BASE_URL:-}
+      LOCAL_STT_API_KEY: ${LOCAL_STT_API_KEY:-}
+      LOCAL_STT_MODEL: ${LOCAL_STT_MODEL:-}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
+      LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
+      LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       YTDLP_COOKIES_FILE: ''
       YTDLP_PROXY: ${YTDLP_PROXY:-}
       YTDLP_PROXY_LIST: ${YTDLP_PROXY_LIST:-}
@@ -854,6 +949,15 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_PORT: ${SMTP_PORT:-587}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_STT_BASE_URL: ${LOCAL_STT_BASE_URL:-}
+      LOCAL_STT_API_KEY: ${LOCAL_STT_API_KEY:-}
+      LOCAL_STT_MODEL: ${LOCAL_STT_MODEL:-}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
+      LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
+      LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
   celery-workflow:
     image: ghcr.io/sleezy6/viralo-workflow:latest
     networks:
@@ -926,6 +1030,15 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_PORT: ${SMTP_PORT:-587}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_STT_BASE_URL: ${LOCAL_STT_BASE_URL:-}
+      LOCAL_STT_API_KEY: ${LOCAL_STT_API_KEY:-}
+      LOCAL_STT_MODEL: ${LOCAL_STT_MODEL:-}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
+      LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
+      LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
   celery-post:
     image: ghcr.io/sleezy6/viralo-platform:latest
     networks:
@@ -998,6 +1111,15 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_PORT: ${SMTP_PORT:-587}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_STT_BASE_URL: ${LOCAL_STT_BASE_URL:-}
+      LOCAL_STT_API_KEY: ${LOCAL_STT_API_KEY:-}
+      LOCAL_STT_MODEL: ${LOCAL_STT_MODEL:-}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
+      LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
+      LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
   celery-notification:
     image: ghcr.io/sleezy6/viralo-platform:latest
     networks:
@@ -1070,6 +1192,15 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_PORT: ${SMTP_PORT:-587}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_STT_BASE_URL: ${LOCAL_STT_BASE_URL:-}
+      LOCAL_STT_API_KEY: ${LOCAL_STT_API_KEY:-}
+      LOCAL_STT_MODEL: ${LOCAL_STT_MODEL:-}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
+      LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
+      LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
   celery-beat:
     image: ghcr.io/sleezy6/viralo-core:latest
     networks:
@@ -1143,6 +1274,15 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_PORT: ${SMTP_PORT:-587}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_STT_BASE_URL: ${LOCAL_STT_BASE_URL:-}
+      LOCAL_STT_API_KEY: ${LOCAL_STT_API_KEY:-}
+      LOCAL_STT_MODEL: ${LOCAL_STT_MODEL:-}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
+      LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
+      LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
 networks:
   viralo-internal:
     driver: bridge

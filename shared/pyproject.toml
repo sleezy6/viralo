@@ -1,3 +1,4 @@
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): pinned SQLAlchemy <2.1.
 [project]
 name = "viralo-shared"
 version = "0.1.0"
