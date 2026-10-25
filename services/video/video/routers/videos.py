@@ -121,6 +121,33 @@ def _ytdlp_fetch_json(url: str, timeout: int = 30) -> dict:
 
 
 log = logging.getLogger(__name__)
+
+_SIZE_UNITS = {"": 1, "B": 1, "K": 1024, "KB": 1024, "M": 1024**2, "MB": 1024**2,
+               "G": 1024**3, "GB": 1024**3, "T": 1024**4, "TB": 1024**4}
+_DEFAULT_MAX_UPLOAD = 10 * 1024**3
+
+
+def _max_upload_bytes() -> int:
+    """MAX_VIDEO_UPLOAD_BYTES as bytes ("10737418240") or with a unit ("10G", "500MB").
+    Default 10 GB; 0 or "unlimited" removes the cap."""
+    raw = (os.getenv("MAX_VIDEO_UPLOAD_BYTES") or "").strip().upper().replace(" ", "")
+    if not raw:
+        return _DEFAULT_MAX_UPLOAD
+    if raw in ("0", "UNLIMITED", "NONE"):
+        return 1 << 62
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)([KMGT]?B?)", raw)
+    if not m:
+        log.warning("MAX_VIDEO_UPLOAD_BYTES=%r isn't a size (try 10G); using 10 GB", raw)
+        return _DEFAULT_MAX_UPLOAD
+    return int(float(m.group(1)) * _SIZE_UNITS[m.group(2)])
+
+
+def _fmt_size(n: int) -> str:
+    for unit, div in (("TB", 1024**4), ("GB", 1024**3), ("MB", 1024**2)):
+        if n >= div:
+            v = n / div
+            return f"{v:.0f} {unit}" if v == int(v) else f"{v:.1f} {unit}"
+    return f"{n} bytes"
 router = APIRouter(tags=["video"])
 
 
@@ -479,13 +506,18 @@ async def upload_video(
     safe_name = Path(file.filename).name if file.filename else "upload.mp4"
     tmp_path = str(tmp_dir / safe_name)
 
-    max_upload_bytes = int(os.getenv("MAX_VIDEO_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024)))
+    max_upload_bytes = _max_upload_bytes()
     file_size = 0
     async with aiofiles.open(tmp_path, "wb") as f:
         while chunk := await file.read(1024 * 1024):
             file_size += len(chunk)
             if file_size > max_upload_bytes:
-                raise HTTPException(status_code=413, detail="Video upload exceeds the maximum allowed size.")
+                await f.close()
+                shutil.rmtree(tmp_dir, ignore_errors=True)  # don't leave the partial file behind
+                raise HTTPException(
+                    status_code=413,
+                    detail=(f"Video upload exceeds the maximum allowed size ({_fmt_size(max_upload_bytes)}). "
+                            "Raise MAX_VIDEO_UPLOAD_BYTES (e.g. 20G) to allow bigger files."))
             await f.write(chunk)
 
     # Enforce storage quota before accepting the upload

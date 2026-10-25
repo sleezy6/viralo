@@ -264,6 +264,8 @@ services:
     mem_limit: 2g
     memswap_limit: 2g
     environment:
+      # Largest video upload accepted, e.g. 10G, 20G, 500MB (0 = no limit).
+      MAX_VIDEO_UPLOAD_BYTES: ${MAX_VIDEO_UPLOAD_BYTES:-10G}
       DATABASE_URL: postgresql+asyncpg://viralo:${POSTGRES_PASSWORD}@postgres:5432/viralo
       REDIS_URL: redis://redis:6379/0
       RABBITMQ_URL: amqp://viralo:${RABBITMQ_PASS}@rabbitmq:5672//
