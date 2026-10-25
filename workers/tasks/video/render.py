@@ -1198,7 +1198,7 @@ def _render_ranking_segment(
     v_chain = f"[0:v:0]trim=start={seek_offset}:duration={duration},setpts=PTS-STARTPTS,{vf_str}[vout]"
     filter_complex = (
         f"{v_chain};"
-        f"[0:a:0]atrim=start={seek_offset}:duration={duration},asetpts=PTS-STARTPTS[aout]"
+        f"[0:a:0]atrim=start={seek_offset}:duration={duration},asetpts=PTS-STARTPTS,apad=whole_dur={duration}[aout]"
     )
 
     tmp_h264 = str(Path(out_path).parent / f"_tmp_rank_{Path(out_path).name}")
@@ -1228,7 +1228,7 @@ def _render_ranking_segment(
         r1 = subprocess.run(cmd1_noaudio, capture_output=True, text=True, timeout=180)
         if r1.returncode != 0 or not Path(tmp_h264).exists() or Path(tmp_h264).stat().st_size < 1000:
             err = r1.stderr
-            excerpt = (err[:400] + "\n...\n" + err[-400:]) if len(err) > 800 else err
+            excerpt = _ffmpeg_error_excerpt(err)
             raise RuntimeError(f"ranking segment pass1 failed (rc={r1.returncode}): {excerpt}")
 
     try:
@@ -1386,7 +1386,8 @@ def _build_precise_trim_command(
     if has_audio:
         filter_complex = (
             f"{v_chain};"
-            f"[0:a:0]atrim=start={seek_offset}{duration_expr},asetpts=PTS-STARTPTS[aout]"
+            f"[0:a:0]atrim=start={seek_offset}{duration_expr},asetpts=PTS-STARTPTS"
+            f"{f',apad=whole_dur={duration}' if duration is not None else ''}[aout]"
         )
         maps = ["-map", "[vout]", "-map", "[aout]"]
         audio_flags = ["-c:a", "aac", "-b:a", "256k"]
@@ -1676,7 +1677,7 @@ def _render_clip_streamcopy(
     if meta.has_audio:
         filter_complex = (
             f"{v_chain};"
-            f"[0:a:0]atrim=start={clip_start}:duration={clip_duration},asetpts=PTS-STARTPTS[aout]"
+            f"[0:a:0]atrim=start={clip_start}:duration={clip_duration},asetpts=PTS-STARTPTS,apad=whole_dur={clip_duration}[aout]"
         )
         maps = ["-map", "[vout]", "-map", "[aout]"]
     else:
@@ -1691,7 +1692,7 @@ def _render_clip_streamcopy(
         if meta.has_audio:
             filter_complex = (
                 f"{v_chain2};"
-                f"[0:a:0]atrim=start={seek_offset}:duration={clip_duration},asetpts=PTS-STARTPTS[aout]"
+                f"[0:a:0]atrim=start={seek_offset}:duration={clip_duration},asetpts=PTS-STARTPTS,apad=whole_dur={clip_duration}[aout]"
             )
         else:
             filter_complex = v_chain2
@@ -1710,6 +1711,7 @@ def _render_clip_streamcopy(
         "-pix_fmt", "yuv420p",
         "-c:a", "aac",
         "-b:a", "256k",
+        "-ac", "2",  # surround (5.1/7.1 game captures) can make the AAC encoder fail
         "-movflags", "+faststart",
         output_path,
     ]
@@ -1719,9 +1721,23 @@ def _render_clip_streamcopy(
     out_ok = Path(output_path).exists() and Path(output_path).stat().st_size >= 1000
     if result.returncode != 0 or not out_ok:
         err = result.stderr
-        excerpt = (err[:400] + "\n...\n" + err[-400:]) if len(err) > 800 else err
+        excerpt = _ffmpeg_error_excerpt(err)
         raise RuntimeError(f"ffmpeg render failed (rc={result.returncode}): {excerpt}")
 
+
+
+def _ffmpeg_error_excerpt(err: str, limit: int = 1200) -> str:
+    """The lines of ffmpeg's stderr that say what went wrong (not the version banner)."""
+    err = err or ""
+    keys = ("error", "invalid", "unsupported", "failed", "cannot", "could not", "not supported",
+            "qsv", "vaapi", "mfx", "no such", "unable", "out of", "conversion failed")
+    banner = ("ffmpeg version", "  built with", "  configuration:", "  lib")
+    lines = [ln for ln in err.splitlines() if ln.strip() and not ln.startswith(banner)
+             and any(k in ln.lower() for k in keys)]
+    picked = "\n".join(dict.fromkeys(lines))
+    if not picked:
+        picked = err[-limit:]
+    return picked[-limit:]
 
 def _render_clip_ffmpeg_captions(*args, **kwargs) -> None:
     """Render a clip; if the GPU encoder fails, turn it off and redo the clip on the CPU."""
@@ -1733,7 +1749,11 @@ def _render_clip_ffmpeg_captions(*args, **kwargs) -> None:
         if not (st["pyav"] or st["ffmpeg"]):
             raise
         hwaccel.disable(str(e))
-        return _render_clip_ffmpeg_captions_impl(*args, **kwargs)
+        logging.warning("[HW] redoing this clip on the CPU")
+        try:
+            return _render_clip_ffmpeg_captions_impl(*args, **kwargs)
+        except Exception as cpu_err:
+            raise RuntimeError(f"render failed on the GPU and again on the CPU: {cpu_err}") from e
 
 
 def _render_clip_ffmpeg_captions_impl(
@@ -1828,7 +1848,7 @@ def _render_clip_ffmpeg_captions_impl(
     if meta.has_audio:
         filter_complex = (
             f"{v_chain};"
-            f"[0:a:0]atrim=start={clip_start}:duration={clip_duration},asetpts=PTS-STARTPTS[aout]"
+            f"[0:a:0]atrim=start={clip_start}:duration={clip_duration},asetpts=PTS-STARTPTS,apad=whole_dur={clip_duration}[aout]"
         )
         maps = ["-map", "[vout]", "-map", "[aout]"]
     else:
@@ -1852,7 +1872,7 @@ def _render_clip_ffmpeg_captions_impl(
         if meta.has_audio:
             filter_complex = (
                 f"{v_chain};"
-                f"[0:a:0]atrim=start={seek_off1}:duration={clip_duration},asetpts=PTS-STARTPTS[aout]"
+                f"[0:a:0]atrim=start={seek_off1}:duration={clip_duration},asetpts=PTS-STARTPTS,apad=whole_dur={clip_duration}[aout]"
             )
         else:
             filter_complex = v_chain
@@ -1871,6 +1891,7 @@ def _render_clip_ffmpeg_captions_impl(
         *_pass1_video_args,
         "-c:a", "aac",
         "-b:a", "256k",
+        "-ac", "2",  # surround (5.1/7.1 game captures) can make the AAC encoder fail
         "-avoid_negative_ts", "make_zero",
         "-movflags", "+faststart",
         tmp_h264,
@@ -1881,7 +1902,7 @@ def _render_clip_ffmpeg_captions_impl(
         r1 = subprocess.run(cmd1, capture_output=True, text=True, timeout=encode_timeout)
         if r1.returncode != 0 or not Path(tmp_h264).exists() or Path(tmp_h264).stat().st_size < 1000:
             err = r1.stderr
-            excerpt = (err[:400] + "\n...\n" + err[-400:]) if len(err) > 800 else err
+            excerpt = _ffmpeg_error_excerpt(err)
             raise RuntimeError(f"ffmpeg transcode pass1 failed (rc={r1.returncode}): {excerpt}")
 
         # Pass 1.5 (blur_fill + punch_zoom only): apply zoompan on the h264 intermediate.

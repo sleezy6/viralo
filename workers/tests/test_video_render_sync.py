@@ -1,3 +1,4 @@
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): audio padded to clip length.
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -19,7 +20,10 @@ def test_editor_precise_trim_command_cuts_audio_and_video_from_same_source_point
     filters = cmd[cmd.index("-filter_complex") + 1]
     assert cmd[cmd.index("-ss") + 1] == "10.345"
     assert "trim=start=2.0:duration=7.999999999999998,setpts=PTS-STARTPTS[vout]" in filters
-    assert "atrim=start=2.0:duration=7.999999999999998,asetpts=PTS-STARTPTS[aout]" in filters
+    # Audio is padded with silence to the clip's length, so a range where the source
+    # has no audio still yields an audio stream (ffmpeg 7 fails on an empty one).
+    assert ("atrim=start=2.0:duration=7.999999999999998,asetpts=PTS-STARTPTS,"
+            "apad=whole_dur=7.999999999999998[aout]") in filters
     assert "-c" not in cmd
     assert "copy" not in cmd
 
