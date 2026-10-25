@@ -1,3 +1,4 @@
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): KEEP_SOURCE_VIDEOS.
 """
 Video processing pipeline — ClipForge-based.
 PyAV for video I/O (no ffmpeg needed for clip export/audio).
@@ -189,8 +190,11 @@ def upload_clip_to_storage(self, clip_id: str, clip_path: str, tenant_id: str, j
         except Exception as _gse:
             logging.warning("push_clip_to_gsheet enqueue failed for clip %s: %s", clip_id, _gse)
 
-        # If all clips for this video are now ready/failed, delete the source from storage
-        if video_id:
+        # If all clips for this video are now ready/failed, delete the source from storage.
+        # Self-hosted installs keep it by default (KEEP_SOURCE_VIDEOS, default true) so
+        # clips can be re-rendered later (Regenerate); hosted SaaS can set it to false.
+        keep_source = os.getenv("KEEP_SOURCE_VIDEOS", "true").strip().lower() in ("1", "true", "yes")
+        if video_id and not keep_source:
             try:
                 with _get_session(tenant_id) as session:
                     counts = session.execute(

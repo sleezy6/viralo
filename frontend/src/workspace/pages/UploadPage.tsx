@@ -1,3 +1,4 @@
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): clip refresh for Regenerate.
 import { useState, useEffect, useRef, useCallback } from "react";
 import { navigate } from "@/lib/router";
 import { videoApi, token as authToken, API_BASES, type VideoResponse, type ClipApiResponse, type ClipConfig } from "@/lib/api";
@@ -322,6 +323,7 @@ export function UploadPage() {
               <ResultsView
                 video={activeVideo}
                 clips={clips}
+                onClipsChange={setClips}
                 onBack={() => navigate("/projects")}
                 onNewUpload={() => navigate("/studio")}
               />

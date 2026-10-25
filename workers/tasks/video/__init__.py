@@ -37,3 +37,4 @@ from workers.tasks.video.render import *  # noqa: F401,F403
 from workers.tasks.video.download import *  # noqa: F401,F403
 from workers.tasks.video.pipeline import *  # noqa: F401,F403
 from workers.tasks.video.tasks import *  # noqa: F401,F403
+from workers.tasks.video.regenerate import *  # noqa: F401,F403  (sleezy6 fork)

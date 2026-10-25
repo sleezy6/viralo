@@ -1,3 +1,4 @@
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): clip regenerate endpoints.
 import asyncio
 import functools
 import io
@@ -1583,6 +1584,76 @@ async def retry_clip_upload(
         args=[str(clip_id), clip_path, token.tenant_id, job_id],
     )
     return clip
+
+
+# ── Regenerate (sleezy6 fork, Apache-2.0) ─────────────────────────────────────
+# mode: "text"   = ask the AI for a new title, captions and hashtags
+#       "render" = re-render the video with the current caption/hook code
+#       "both"   = new AI text, then re-render with it (the hook uses the title)
+_REGEN_READY_STATUSES = ("ready", "upload_failed", "failed")
+
+
+class RegenerateRequest(_BaseModel):
+    mode: Literal["text", "render", "both"]
+
+
+def _queue_regenerate(tenant_id: str, video_id: str, clip_ids: list[str], mode: str) -> None:
+    _get_celery().send_task(
+        "workers.tasks.video.regenerate_clips",
+        args=[str(uuid.UUID(str(tenant_id))), video_id, clip_ids, mode],
+    )
+
+
+@router.post("/clips/{clip_id}/regenerate", response_model=ClipResponse, status_code=status.HTTP_202_ACCEPTED)
+async def regenerate_clip(
+    clip_id: uuid.UUID,
+    body: RegenerateRequest,
+    token: TokenPayload = Depends(get_current_user),
+    db: AsyncSession = Depends(get_tenant_db),
+):
+    """Regenerate one clip's AI text and/or re-render it, in place."""
+    result = await db.execute(
+        select(Clip).where(Clip.id == clip_id, Clip.tenant_id == uuid.UUID(token.tenant_id),
+                           Clip.status != "deleted")
+    )
+    clip = result.scalar_one_or_none()
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found.")
+    if clip.status not in _REGEN_READY_STATUSES:
+        raise HTTPException(status_code=409, detail=f"Clip is busy ({clip.status}); try again when it's ready.")
+    clip.status = "regenerating"
+    await db.commit()
+    await db.refresh(clip)
+    _queue_regenerate(token.tenant_id, str(clip.video_id), [str(clip.id)], body.mode)
+    return clip
+
+
+@router.post("/videos/{video_id}/regenerate", status_code=status.HTTP_202_ACCEPTED)
+async def regenerate_video_clips(
+    video_id: uuid.UUID,
+    body: RegenerateRequest,
+    token: TokenPayload = Depends(get_current_user),
+    db: AsyncSession = Depends(get_tenant_db),
+):
+    """Regenerate every clip of a video that isn't busy. One background job handles
+    them in order, so the source video is fetched once."""
+    tenant = uuid.UUID(token.tenant_id)
+    video = (await db.execute(select(Video).where(Video.id == video_id, Video.tenant_id == tenant))).scalar_one_or_none()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found.")
+    clips = (await db.execute(
+        select(Clip).where(Clip.video_id == video_id, Clip.tenant_id == tenant,
+                           Clip.status.in_(_REGEN_READY_STATUSES))
+        .order_by(Clip.start_sec)
+    )).scalars().all()
+    if not clips:
+        raise HTTPException(status_code=409, detail="No clips are ready to regenerate.")
+    for c in clips:
+        c.status = "regenerating"
+    await db.commit()
+    clip_ids = [str(c.id) for c in clips]
+    _queue_regenerate(token.tenant_id, str(video_id), clip_ids, body.mode)
+    return {"queued": len(clip_ids), "clip_ids": clip_ids, "mode": body.mode}
 
 
 @router.delete("/clips/{clip_id}", status_code=status.HTTP_204_NO_CONTENT)

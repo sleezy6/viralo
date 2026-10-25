@@ -1,3 +1,4 @@
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): working Regenerate.
 import { useState } from "react";
 import { cn, safeFilename, downloadBlob, downloadUrl, stripSrtTimecodes } from "@/lib/utils";
 import { videoApi, platformApi, type ClipApiResponse, type ScheduledPost, type ScheduledPostSummary } from "@/lib/api";
@@ -6,6 +7,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { PLAT_DISPLAY, PlatPill, VirChip, fmtSec } from "./helpers";
 import { BulkPublishModal } from "./BulkPublishModal";
 import { VideoEditor } from "../../components/VideoEditor";
+import { RegenerateDialog, CLIP_BUSY_STATUSES } from "./RegenerateDialog";
 
 /* ─── Clip detail modal ─── */
 const DETAIL_PLAT_CFG: Record<string, { color: string; icon: string }> = {
@@ -549,7 +551,7 @@ function DownloadMenu({ clip, onClose }: { clip: ClipApiResponse; onClose: () =>
 }
 
 /* ─── Clip card ─── */
-export function ClipCard({ clip, idx, selected = false, onToggleSelect, isPosted = false, isScheduled = false, posts = [], onOpen }: {
+export function ClipCard({ clip, idx, selected = false, onToggleSelect, isPosted = false, isScheduled = false, posts = [], onOpen, totalClips = 1, onRegenerated }: {
   clip: ClipApiResponse;
   idx: number;
   selected?: boolean;
@@ -558,18 +560,23 @@ export function ClipCard({ clip, idx, selected = false, onToggleSelect, isPosted
   isScheduled?: boolean;
   posts?: ScheduledPostSummary[];
   onOpen?: () => void;
+  /** Clips in this video, for the dialog's "All clips" option. */
+  totalClips?: number;
+  /** Called after a regenerate job is queued, so the page can refresh and poll. */
+  onRegenerated?: () => void;
 }) {
   const [showEditor,     setShowEditor]     = useState(false);
   const [showDl,         setShowDl]         = useState(false);
   const [showPublish,    setShowPublish]    = useState(false);
-  const [regenerating,   setRegenerating]   = useState(false);
+  const [showRegen,      setShowRegen]      = useState(false);
   const [upscaling,      setUpscaling]      = useState(false);
   const [localClip,      setLocalClip]      = useState(clip);
+  // Pick up fresh data when the page reloads clips (e.g. while a regenerate runs).
+  useEffect(() => { setLocalClip(clip); }, [clip]);
+  const regenerating = CLIP_BUSY_STATUSES.includes(localClip.status);
+  const regenError = localClip.clip_metadata?.regenerate_error;
 
-  const handleRegen = () => {
-    setRegenerating(true);
-    setTimeout(() => setRegenerating(false), 2200);
-  };
+  const handleRegen = () => setShowRegen(true);
 
   const handleUpscale = async () => {
     setUpscaling(true);
@@ -607,7 +614,7 @@ export function ClipCard({ clip, idx, selected = false, onToggleSelect, isPosted
     { id: "trim", label: "Trim", icon: "✂", onClick: () => setShowEditor(true) },
     { id: "edit", label: "Edit", icon: "✎", onClick: () => setShowEditor(true) },
     ...(localClip.caption_srt ? [{ id: "transcript" as ClipCardAction, label: "Transcript", icon: "☷" }] : []),
-    { id: "regenerate", label: regenerating ? "Regenerating" : "Regenerate", icon: "✦", disabled: regenerating, onClick: handleRegen },
+    { id: "regenerate", label: regenerating ? "Regenerating…" : "Regenerate", icon: "✦", disabled: regenerating, onClick: handleRegen },
     { id: "upscale", label: upscaling ? "Upscaling…" : localClip.upscaled_storage_url ? "Upscaled ✓" : "Upscale 4K", icon: "⬆", disabled: upscaling, onClick: handleUpscale },
     { id: "download", label: "Download", icon: "↓", onClick: () => setShowDl(true) },
   ];
@@ -631,11 +638,33 @@ export function ClipCard({ clip, idx, selected = false, onToggleSelect, isPosted
         />
         {regenerating && (
           <div className="pointer-events-none absolute inset-0 grid place-items-center rounded-[16px] bg-black/45 backdrop-blur-[1px]">
-            <span className="block h-10 w-10 rounded-full border-[3px] border-white/20 border-t-white animate-spin" />
+            <div className="flex flex-col items-center gap-2">
+              <span className="block h-10 w-10 rounded-full border-[3px] border-white/20 border-t-white animate-spin" />
+              <span className="text-[12px] font-semibold text-white/90">Regenerating…</span>
+            </div>
           </div>
+        )}
+        {!regenerating && regenError && (
+          <p role="status" title={regenError}
+            className="mt-1.5 line-clamp-2 rounded-[8px] border border-red-400/25 bg-red-400/10 px-2.5 py-1.5 text-[11px] leading-snug text-red-300">
+            Regenerate failed: {regenError}
+          </p>
         )}
         {showDl && <DownloadMenu clip={localClip} onClose={() => setShowDl(false)} />}
       </div>
+
+      {showRegen && (
+        <RegenerateDialog
+          videoId={localClip.video_id}
+          clip={localClip}
+          totalClips={totalClips}
+          onClose={() => setShowRegen(false)}
+          onQueued={({ clip: updated }) => {
+            if (updated) setLocalClip(updated);
+            onRegenerated?.();
+          }}
+        />
+      )}
 
       {showEditor && (
         <VideoEditor

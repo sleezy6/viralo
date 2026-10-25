@@ -1,21 +1,16 @@
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): working Regenerate all.
 import { useState, useEffect, useRef, useMemo } from "react";
 import { cn, safeFilename, downloadBlob, downloadUrl, stripSrtTimecodes } from "@/lib/utils";
 import { videoApi, type VideoResponse, type ClipApiResponse, type ScheduledPostSummary } from "@/lib/api";
 import { VirtualizedGrid } from "../../components/VirtualizedCollection";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ClipCard, ClipDetailModal } from "./ClipCard";
+import { RegenerateDialog, CLIP_BUSY_STATUSES } from "./RegenerateDialog";
 import { BulkPublishModal } from "./BulkPublishModal";
 import { gradFromId } from "./helpers";
 
 type ZipPhase = "zipping" | "done" | "error";
 
-const REGEN_OPTS = [
-  { id:"hook",        label:"Optimize hooks"    },
-  { id:"top-moments", label:"More top moments"  },
-  { id:"captions",    label:"Recaption"          },
-  { id:"short",       label:"Shorten to 30s"    },
-  { id:"vertical",    label:"Reformat vertical" },
-];
 
 export function DeleteModal({
   video,
@@ -346,16 +341,32 @@ export function ResultsView({
   clips,
   onBack,
   onNewUpload,
+  onClipsChange,
 }: {
   video: VideoResponse;
   clips: ClipApiResponse[];
   onBack: () => void;
   onNewUpload?: () => void;
+  /** Receives a fresh clip list (after Regenerate, and while regenerating clips finish). */
+  onClipsChange?: (clips: ClipApiResponse[]) => void;
 }) {
   const grad = gradFromId(video.id);
   const [regenModal, setRegenModal] = useState(false);
-  const [regenOpts, setRegenOpts] = useState(["hook","top-moments","captions"]);
-  const toggleOpt = (id: string) => setRegenOpts((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]);
+
+  // Reload clips from the server, and keep doing so while any clip is regenerating.
+  const refreshClips = async () => {
+    try {
+      const list = await videoApi.clips(video.id);
+      onClipsChange?.(list.items);
+    } catch { /* keep the current list; the next poll retries */ }
+  };
+  const anyRegenerating = clips.some((c) => CLIP_BUSY_STATUSES.includes(c.status));
+  useEffect(() => {
+    if (!anyRegenerating || !onClipsChange) return;
+    const t = setInterval(refreshClips, 4000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anyRegenerating, video.id]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkModal, setBulkModal] = useState(false);
   const [zipModal, setZipModal] = useState(false);
@@ -524,6 +535,8 @@ export function ResultsView({
                 isScheduled={scheduledClipIds.has(c.id)}
                 posts={postsByClipId.get(c.id) ?? []}
                 onOpen={() => setDetailClip(c)}
+                totalClips={clips.length}
+                onRegenerated={refreshClips}
               />
             )}
           />
@@ -554,47 +567,12 @@ export function ResultsView({
       )}
 
       {regenModal && (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center p-3 sm:p-6"
-          style={{ background: "rgba(4,7,15,.8)", backdropFilter: "blur(6px)", animation: "fadeUp .15s ease" }}
-          onClick={(e) => e.target === e.currentTarget && setRegenModal(false)}>
-          <div className="w-full max-w-[460px] overflow-hidden rounded-[18px] border border-c-border bg-surface-1 p-4 shadow-[0_40px_100px_rgba(0,0,0,.7)] sm:rounded-[20px] sm:p-6"
-            style={{ animation: "fadeUp .2s cubic-bezier(.22,.8,.4,1)" }}
-            onClick={(e) => e.stopPropagation()}>
-            <div className="mb-5 flex items-center gap-3">
-              <div className="grid h-9 w-9 place-items-center rounded-[10px] border border-[#ff3d6a]/25 bg-[#ff3d6a]/10 text-[#ff3d6a]">✦</div>
-              <div>
-                <h3 className="font-display text-[16px] font-bold text-c-text">Regenerate clips</h3>
-                <p className="text-[12px] text-c-text-muted">Choose what to optimize in the new batch</p>
-              </div>
-              <button onClick={() => setRegenModal(false)} className="ml-auto grid h-7 w-7 place-items-center rounded-[7px] border border-c-border text-[13px] text-c-text-muted hover:text-c-text">✕</button>
-            </div>
-
-            <div className="mb-2 text-[10.5px] font-bold uppercase tracking-[.1em] text-c-text-muted">Optimization options</div>
-            <div className="mb-5 flex flex-wrap gap-2">
-              {REGEN_OPTS.map((o) => (
-                <button key={o.id} onClick={() => toggleOpt(o.id)}
-                  className={cn("rounded-[8px] border px-3 py-1.5 text-[12px] font-semibold transition",
-                    regenOpts.includes(o.id)
-                      ? "border-[#ff3d6a]/35 bg-[#ff3d6a]/10 text-[#ff3d6a]"
-                      : "border-c-border bg-surface-2 text-c-text-secondary hover:border-c-border-hover hover:text-c-text"
-                  )}>
-                  {o.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex gap-2.5">
-              <button onClick={() => setRegenModal(false)}
-                className="rounded-[9px] border border-c-border bg-surface-2 px-4 py-2 text-[13px] font-semibold text-c-text-secondary transition hover:text-c-text">
-                Cancel
-              </button>
-              <button onClick={() => setRegenModal(false)}
-                className="ml-auto flex items-center gap-1.5 rounded-[9px] bg-[#ff3d6a] px-4 py-2 text-[13px] font-semibold text-white shadow-[0_2px_12px_rgba(255,61,106,.3)]">
-                ✦ Regenerate {clips.length} clips
-              </button>
-            </div>
-          </div>
-        </div>
+        <RegenerateDialog
+          videoId={video.id}
+          totalClips={clips.length}
+          onClose={() => setRegenModal(false)}
+          onQueued={() => { void refreshClips(); }}
+        />
       )}
 
       {detailClip && (

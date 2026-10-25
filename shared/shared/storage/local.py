@@ -1,3 +1,4 @@
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): added download().
 import os
 import hashlib
 import hmac
@@ -62,6 +63,20 @@ class LocalStorageAdapter(StorageAdapter):
 
     async def get_signed_url(self, path: str, expires_in: int = 3600) -> str:
         return sign_local_url(path, expires_in)
+
+    async def download(self, path: str, dest_path: str) -> None:
+        """Copy a stored file to dest_path. Accepts a storage key ("clips/a.mp4") or the
+        URL upload() returned ("/storage/clips/a.mp4", optionally signed). The other
+        backends implement this; without it, publishing and clip re-export crashed
+        with AttributeError on local storage."""
+        import shutil
+        from urllib.parse import unquote, urlsplit
+        relative = unquote(urlsplit(path).path).removeprefix("/storage/").lstrip("/")
+        src = _safe_local_path(relative)
+        if not src.is_file():
+            raise FileNotFoundError(f"Local storage file not found: {relative}")
+        Path(dest_path).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dest_path)
 
     async def delete(self, path: str) -> None:
         full_path = _safe_local_path(path)

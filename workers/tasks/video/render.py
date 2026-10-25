@@ -3,6 +3,8 @@
 # outlines); hook red circle only for templates with "hook_circle" (sports).
 # Caption/hook text aligned inside its boxes and pills; hook title fits the frame.
 # Hook text cut at natural breaks instead of mid-phrase.
+# _export_clip(existing_clip_id=...) re-renders a clip in place (Regenerate).
+# Music/voiceover mix keeps +faststart; PyAV renders set it on the container (was ignored).
 """
 Video processing pipeline — ClipForge-based.
 PyAV for video I/O (no ffmpeg needed for clip export/audio).
@@ -1221,7 +1223,8 @@ def _render_ranking_segment(
             raise RuntimeError(f"ranking segment pass1 failed (rc={r1.returncode}): {excerpt}")
 
     try:
-        with av.open(tmp_h264) as src, av.open(out_path, "w", format="mp4") as dst:
+        with av.open(tmp_h264) as src, av.open(out_path, "w", format="mp4",
+                                              options={"movflags": "+faststart"}) as dst:
             v_stream = next((s for s in src.streams if s.type == "video"), None)
             a_stream = next((s for s in src.streams if s.type == "audio"), None)
             if v_stream is None:
@@ -1232,7 +1235,7 @@ def _render_ranking_segment(
             out_v.width = target_w
             out_v.height = target_h
             out_v.pix_fmt = "yuv420p"
-            out_v.options = {"crf": "23", "preset": "veryfast", "movflags": "+faststart"}
+            out_v.options = {"crf": "23", "preset": "veryfast"}
 
             out_a = None
             if a_stream is not None:
@@ -1602,6 +1605,9 @@ def _mix_audio_tracks(clip_path: str, out_path: str, music_path: str | None = No
         "-c:a", "aac", "-b:a", "192k",
         "-shortest",
         "-avoid_negative_ts", "make_zero",
+        # Keep the index (moov) at the front like every other render step; without it
+        # music/voiceover clips put it last and browser previews could stay black.
+        "-movflags", "+faststart",
         out_path,
     ]
     try:
@@ -1957,7 +1963,9 @@ def _render_clip(
     last_video_pts = -1
     audio_sample_idx = 0
 
-    with av.open(output_path, "w", format="mp4") as dst:
+    # movflags is a muxer (container) option: set on the encoder stream, as before, it
+    # was ignored and every caption-burned clip had its index at the end of the file.
+    with av.open(output_path, "w", format="mp4", options={"movflags": "+faststart"}) as dst:
         out_v = dst.add_stream("h264", rate=fps_int)
         out_v.width = target_width
         out_v.height = target_height
@@ -1967,7 +1975,6 @@ def _render_clip(
             "preset": "veryfast",
             "profile:v": "high",
             "level": "4.2",
-            "movflags": "+faststart", # web-optimized: moov atom at front for streaming
         }
 
         with av.open(source_path) as src:
@@ -2119,14 +2126,17 @@ def _export_clip(
     job_id: str = "",
     clip_index: int = 0,
     clip_total: int = 1,
+    existing_clip_id: str | None = None,
 ) -> str | None:
+    """Render one clip and record it. With existing_clip_id (regenerate), the clip is
+    re-rendered into the same row and storage key instead of inserting a new clip."""
     from workers.tasks.templates import resolve_template, MUSIC_TRACKS
 
     def _prog(step: str, pct: int, msg: str) -> None:
         if job_id:
             _publish_progress(job_id, step, pct, "processing", msg)
 
-    clip_id = str(uuid.uuid4())
+    clip_id = existing_clip_id or str(uuid.uuid4())
     clip_path = str(work_dir / f"clip_{clip_id}.mp4")
     thumb_path = str(work_dir / f"clip_{clip_id}_thumb.jpg")
 
@@ -2314,6 +2324,27 @@ def _export_clip(
             Path(thumb_path).unlink(missing_ok=True)
         except Exception:
             pass
+
+    if existing_clip_id:
+        # Regenerate: keep the old video and storage_url until the new upload lands;
+        # merge metadata so keys set elsewhere (e.g. upscale info) survive.
+        with _get_session(tenant_id) as session:
+            session.execute(
+                text("""
+                    UPDATE clips
+                       SET title = :title,
+                           thumbnail_url = COALESCE(:thumb, thumbnail_url),
+                           caption_srt = :srt,
+                           metadata = (COALESCE(metadata, '{}'::jsonb) - 'regenerate_error')
+                                      || CAST(:meta AS jsonb),
+                           status = 'pending_upload',
+                           updated_at = NOW()
+                     WHERE id = CAST(:id AS uuid)
+                """),
+                {"id": clip_id, "title": ai_title, "thumb": thumb_url,
+                 "srt": srt_content, "meta": json.dumps(clip_meta)},
+            )
+        return clip_id, clip_path
 
     with _get_session(tenant_id) as session:
         session.execute(

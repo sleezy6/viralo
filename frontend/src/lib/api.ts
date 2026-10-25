@@ -1,3 +1,4 @@
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): regenerate API.
 import { clearQueryCache } from "./query";
 
 export const API_BASES = {
@@ -245,6 +246,8 @@ export interface ScheduledPostSummary {
   last_error: string | null;
 }
 
+export type RegenerateMode = "text" | "render" | "both";
+
 export interface ClipApiResponse {
   id: string;
   video_id: string;
@@ -272,6 +275,8 @@ export interface ClipApiResponse {
     platform_copy?: Record<string, { description: string; tags: string[] }>;
     ranking?: boolean;
     editor?: EditorData;
+    /** Set when the last Regenerate failed for this clip (cleared on success). */
+    regenerate_error?: string;
   } | null;
   upload_attempts: number | null;
   upload_error: string | null;
@@ -487,6 +492,11 @@ export const videoApi = {
     videoReq<{ task_id: string; message: string }>("POST", "/clips/merge-ai", { clip_ids: clipIds }),
   retryClipUpload: (clipId: string) =>
     videoReq<ClipApiResponse>("POST", `/clips/${clipId}/retry-upload`),
+  /** "text" = new AI title/caption/tags, "render" = re-render, "both" = new text then re-render. */
+  regenerateClip: (clipId: string, mode: RegenerateMode) =>
+    videoReq<ClipApiResponse>("POST", `/clips/${clipId}/regenerate`, { mode }),
+  regenerateVideoClips: (videoId: string, mode: RegenerateMode) =>
+    videoReq<{ queued: number; clip_ids: string[]; mode: RegenerateMode }>("POST", `/videos/${videoId}/regenerate`, { mode }),
   upscaleClip: (clipId: string, targetResolution: "1080p" | "4K" = "4K") =>
     videoReq<ClipApiResponse>("POST", `/clips/${clipId}/upscale?target_resolution=${targetResolution}`),
   listRanking: (page = 1, per_page = 20) =>

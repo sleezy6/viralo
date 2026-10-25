@@ -1,3 +1,5 @@
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): per-word timings
+# saved with transcripts, and _load_transcript_words() for clip regeneration.
 """
 Video processing pipeline — ClipForge-based.
 PyAV for video I/O (no ffmpeg needed for clip export/audio).
@@ -74,6 +76,7 @@ __all__ = [
     '_check_cancelled',
     '_save_step_artifact',
     '_save_transcript',
+    '_load_transcript_words',
     'LLM_PROVIDERS',
     '_shared_call_llm_json',
     'probe_all_providers',
@@ -471,12 +474,16 @@ def _save_transcript(tenant_id: str, video_id: str, words: list[WordTimestamp]) 
             segments.append({
                 "start": cur_start, "end": current[-1].end,
                 "text": " ".join(x.word for x in current),
+                # Per-word timings, so a clip can be re-rendered later with the same
+                # caption timing (compact [word, start, end]; readers ignore extra keys).
+                "words": [[x.word, round(x.start, 3), round(x.end, 3)] for x in current],
             })
             current, cur_start = [], None
     if current:
         segments.append({
             "start": cur_start, "end": current[-1].end,
             "text": " ".join(x.word for x in current),
+            "words": [[x.word, round(x.start, 3), round(x.end, 3)] for x in current],
         })
 
     full_text = " ".join(w.word for w in words)
@@ -497,6 +504,40 @@ def _save_transcript(tenant_id: str, video_id: str, words: list[WordTimestamp]) 
                 "txt": full_text,
             },
         )
+
+
+def _load_transcript_words(tenant_id: str, video_id: str) -> list[WordTimestamp]:
+    """Word timings for a processed video, from its saved transcript.
+
+    Uses the per-word timings saved with each segment; transcripts saved before those
+    were stored only have segment start/end, so words are spread across each segment
+    by length (the same estimate used for segment-only speech models)."""
+    with _get_session(tenant_id) as session:
+        row = session.execute(
+            text("SELECT segments FROM transcripts WHERE video_id = CAST(:vid AS uuid)"),
+            {"vid": video_id},
+        ).fetchone()
+    segments = (row[0] if row else None) or []
+    if isinstance(segments, str):
+        segments = json.loads(segments)
+    words: list[WordTimestamp] = []
+    for seg in segments:
+        saved = seg.get("words")
+        if saved:
+            words.extend(WordTimestamp(str(w), float(s), float(e)) for w, s, e in saved)
+            continue
+        tokens = str(seg.get("text") or "").split()
+        if not tokens:
+            continue
+        s0, s1 = float(seg.get("start") or 0), float(seg.get("end") or 0)
+        dur = max(s1 - s0, 0.01)
+        weights = [max(len(t), 1) for t in tokens]
+        total, t = sum(weights), s0
+        for tok, wt in zip(tokens, weights):
+            d = dur * wt / total
+            words.append(WordTimestamp(tok, round(t, 3), round(t + d, 3)))
+            t += d
+    return words
 
 
 # ── Stage 1: Probe video via PyAV ─────────────────────────────────────────────
