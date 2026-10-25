@@ -1,6 +1,7 @@
 // Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): working Regenerate all.
 import { useState, useEffect, useRef, useMemo } from "react";
 import { EditableTitle } from "../../components/EditableTitle";
+import { SpeakersPanel } from "./SpeakersPanel";
 import { cn, safeFilename, downloadBlob, downloadUrl, stripSrtTimecodes } from "@/lib/utils";
 import { videoApi, type VideoResponse, type ClipApiResponse, type ScheduledPostSummary } from "@/lib/api";
 import { VirtualizedGrid } from "../../components/VirtualizedCollection";
@@ -355,7 +356,7 @@ export function ResultsView({
   onClipsChange?: (clips: ClipApiResponse[]) => void;
 }) {
   const grad = gradFromId(video.id);
-  const [regenModal, setRegenModal] = useState(false);
+  const [regenModal, setRegenModal] = useState<boolean | "render">(false);
 
   // Reload clips from the server, and keep doing so while any clip is regenerating.
   const refreshClips = async () => {
@@ -496,6 +497,9 @@ export function ResultsView({
           </DropdownMenu>
         </div>
       </div>
+      {onVideoChange && (
+        <SpeakersPanel video={video} onVideoChange={onVideoChange} onRerender={() => setRegenModal("render")} />
+      )}
       {selected.size > 0 && (
         <div className="mb-4 flex items-center gap-3 rounded-[10px] border border-[#ff3d6a]/20 bg-[#ff3d6a]/5 px-4 py-2.5">
           <span className="text-[12.5px] font-semibold text-rose-400">{selected.size} clip{selected.size > 1 ? "s" : ""} selected</span>
@@ -585,6 +589,7 @@ export function ResultsView({
         <RegenerateDialog
           videoId={video.id}
           totalClips={clips.length}
+          defaultMode={regenModal === "render" ? "render" : "both"}
           onClose={() => setRegenModal(false)}
           onQueued={() => { void refreshClips(); }}
         />

@@ -287,6 +287,7 @@ class CaptionSegment:
     end: float
     words: list = field(default_factory=list)
     speaker: str | None = None
+    color: tuple | None = None  # (r, g, b) speaker colour; None = the style's text colour
 
 
 @dataclass

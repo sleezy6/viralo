@@ -95,6 +95,7 @@ export function RegenerateDialog({
   clip,
   totalClips,
   sourceDuration,
+  defaultMode = "both",
   defaultScope = clip ? "this" : "all",
   onClose,
   onQueued,
@@ -104,12 +105,13 @@ export function RegenerateDialog({
   totalClips: number;
   /** Original video length (seconds): the furthest a clip can be extended. */
   sourceDuration?: number | null;
+  defaultMode?: RegenerateMode;
   defaultScope?: RegenerateScope;
   onClose: () => void;
   /** Called once the server accepted the job; `clip` is the updated clip for scope "this". */
   onQueued: (result: { scope: RegenerateScope; mode: RegenerateMode; clip?: ClipApiResponse; queued: number }) => void;
 }) {
-  const [mode, setMode] = useState<RegenerateMode>("both");
+  const [mode, setMode] = useState<RegenerateMode>(defaultMode);
   const [scope, setScope] = useState<RegenerateScope>(clip ? defaultScope : "all");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");

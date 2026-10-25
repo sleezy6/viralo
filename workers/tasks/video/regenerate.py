@@ -104,8 +104,11 @@ def _segment_from_text(text_: str, start: float, end: float, words: list, base: 
             t += d
     seg_words = [WordTimestamp(tok, max(0.0, a - base), max(0.0, b - base))
                  for tok, (a, b) in zip(toks, times)]
+    # Speaker: whoever says most of the transcript's words in this stretch.
+    voices = [w.speaker for w in words if getattr(w, "speaker", None) and w.start < end and w.end > start]
+    speaker = max(set(voices), key=voices.count) if voices else None
     return CaptionSegment(text=" ".join(toks), start=max(0.0, start - base),
-                          end=max(0.0, end - base), words=seg_words)
+                          end=max(0.0, end - base), words=seg_words, speaker=speaker)
 
 
 def _build_captions(words: list, clip: ClipResult, max_words: int, custom: dict | None) -> list:
@@ -198,6 +201,10 @@ def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
     vmeta = vrow.metadata or {}
 
     words = _load_transcript_words(tenant_id, video_id)
+    from workers.tasks.video.speakers import init_speakers, load_speakers, speaker_names
+    from workers.tasks.video.transcribe import set_speaker_names
+    spk_settings = load_speakers(tenant_id, video_id) or init_speakers(tenant_id, video_id, words)
+    set_speaker_names(speaker_names(spk_settings))
     style = _effective_caption_style(cfg)
     words_per_line = 5 if style == "tiktok" else (3 if style in CAPCUT_STYLES else 6)  # as the pipeline
     language = _resolve_pipeline_language(cfg, meta_lang=vmeta.get("language_detected") or None)

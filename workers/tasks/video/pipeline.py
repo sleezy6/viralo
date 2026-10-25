@@ -341,6 +341,8 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
     topic_focus = cfg.get("topic_focus", "")
     # Game context (Steam): background for every AI step below, via the topic line.
     from workers.tasks.video.game_context import _resolve_video_game, with_game_context
+    from workers.tasks.video.transcribe import set_speaker_names
+    set_speaker_names({})  # this video's speaker names, once known (worker processes are reused)
     _publish_progress(job_id, "metadata", 3, "processing", "Looking up the game…")
     _game = _resolve_video_game(tenant_id, video_id, cfg, title=(yt_meta or {}).get("title", ""))
     if _game:
@@ -454,6 +456,8 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
 
         if words:
             _save_transcript(tenant_id, video_id, words)
+            from workers.tasks.video.speakers import init_speakers, speaker_names
+            set_speaker_names(speaker_names(init_speakers(tenant_id, video_id, words)))
 
             # Stage 6: Speaker diarization
             _publish_progress(job_id, "diarization", 36, "processing", "Identifying speakers…")
@@ -869,6 +873,8 @@ def _gvc_inner(self, tenant_id, video_id, job_id, cfg):
 
         if words:
             _save_transcript(tenant_id, video_id, words)
+            from workers.tasks.video.speakers import init_speakers
+            init_speakers(tenant_id, video_id, words)
 
     if not words:
         _update_video(tenant_id, video_id, status="failed",
@@ -893,6 +899,9 @@ def _gvc_inner(self, tenant_id, video_id, job_id, cfg):
     _stored_game = _vm.get("game") if isinstance(_vm, dict) else None
     if cfg.get("game") or cfg.get("game_appid") or not _stored_game:
         _stored_game = _resolve_video_game(tenant_id, video_id, cfg) or _stored_game
+    from workers.tasks.video.speakers import load_speakers, speaker_names
+    from workers.tasks.video.transcribe import set_speaker_names
+    set_speaker_names(speaker_names(load_speakers(tenant_id, video_id)))
     if _stored_game:
         from workers.tasks.video.game_context import _title_from_game
         _title_from_game(tenant_id, video_id, _stored_game)

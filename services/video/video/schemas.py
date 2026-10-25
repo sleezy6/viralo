@@ -202,9 +202,27 @@ class VideoResponse(BaseModel):
     created_at: Any
     # Game the AI was given as background (from videos.metadata->'game'), if any.
     game: dict | None = Field(default=None, validation_alias="video_metadata")
+    # Speakers found in the transcript, with the user's names and caption colours:
+    # {"colors": bool, "list": [{"id", "name", "color"}]} (videos.metadata->'speakers').
+    speakers: dict | None = Field(default=None, validation_alias="video_metadata")
     model_config = {"from_attributes": True}
 
     _sign_media = field_validator("storage_url", "thumbnail_url", mode="before")(sign_media_url)
+
+    @field_validator("speakers", mode="before")
+    @classmethod
+    def _speakers_from_metadata(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                return None
+        sp = value.get("speakers") if isinstance(value, dict) else None
+        if not isinstance(sp, dict) or not isinstance(sp.get("list"), list) or not sp["list"]:
+            return None
+        lst = [{"id": str(x.get("id")), "name": x.get("name") or None, "color": x.get("color")}
+               for x in sp["list"] if isinstance(x, dict) and x.get("id")]
+        return {"colors": sp.get("colors", True) is not False, "list": lst} if lst else None
 
     @field_validator("game", mode="before")
     @classmethod
@@ -353,6 +371,17 @@ class YouTubeImportRequest(BaseModel):
 
 class GenerateClipsRequest(BaseModel):
     config: ClipConfig = Field(default_factory=ClipConfig)
+
+
+class SpeakerUpdate(BaseModel):
+    id: str = Field(min_length=1, max_length=16)
+    name: str | None = Field(default=None, max_length=40)
+    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+
+
+class SpeakersUpdateRequest(BaseModel):
+    colors: bool | None = None  # colour captions by speaker
+    speakers: list[SpeakerUpdate] = Field(default_factory=list, max_length=20)
 
 
 class VideoUpdateRequest(BaseModel):

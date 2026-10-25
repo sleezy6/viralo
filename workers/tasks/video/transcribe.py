@@ -15,6 +15,7 @@ import io
 import json
 import logging
 import os
+import contextvars
 import re
 import shutil
 import subprocess
@@ -674,6 +675,15 @@ def _speech_rate_signals(words: list[WordTimestamp], top_n: int = 10) -> list[di
     return deduped
 
 
+# Names the user gave the speakers of the video being processed ({"S1": "Rich"}).
+# Set per task with set_speaker_names(); the AI transcript uses them over "Speaker 1".
+_SPEAKER_NAMES: contextvars.ContextVar[dict] = contextvars.ContextVar("speaker_names", default={})
+
+
+def set_speaker_names(names: dict | None) -> None:
+    _SPEAKER_NAMES.set(dict(names or {}))
+
+
 def _build_timed_transcript(words: list[WordTimestamp]) -> str:
     """Build M:SS-stamped transcript lines for LLM input."""
     if not words:
@@ -684,7 +694,13 @@ def _build_timed_transcript(words: list[WordTimestamp]) -> str:
 
     def _line(start: float, toks: list[str], who: str | None) -> str:
         m, s = divmod(int(start), 60)
-        tag = f"Speaker {who[1:]}: " if multi and who and who.startswith("S") else (f"{who}: " if multi and who else "")
+        names = _SPEAKER_NAMES.get()
+        if not (multi and who):
+            tag = ""
+        elif names.get(who):
+            tag = f"{names[who]}: "
+        else:
+            tag = f"Speaker {who[1:]}: " if who.startswith("S") else f"{who}: "
         return f"[{m}:{s:02d}] {tag}{' '.join(toks)}"
 
     for w in words:

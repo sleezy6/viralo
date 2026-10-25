@@ -156,6 +156,7 @@ def _generate_captions(words: list[WordTimestamp], clip: ClipResult, max_words: 
                 end=segments[i + 1].start,
                 words=segments[i].words,
                 speaker=segments[i].speaker,
+                color=segments[i].color,
             )
 
     return segments
@@ -405,10 +406,10 @@ def _build_caption_timeline(segments: list[CaptionSegment], style: str) -> dict:
                 if t_end - t_start < 0.12:
                     t_end = t_start + 0.12
                 for cs in range(int(t_start * 100), int(t_end * 100) + 1):
-                    timeline[cs] = (list(words), i)
+                    timeline[cs] = (list(words), i, getattr(seg, "color", None))
         else:
             for cs in range(int(seg.start * 100), int(seg.end * 100) + 1):
-                timeline[cs] = (seg.text, None)
+                timeline[cs] = (seg.text, None, getattr(seg, "color", None))
     return timeline
 
 
@@ -452,6 +453,10 @@ def _draw_caption(img, t: float, caption_timeline: dict, style: str, width: int,
             return img
     entry = caption_timeline[cs]
     text_color, highlight_color, ctx_alpha, font_size, bg_color = cfg
+    if len(entry) > 2:
+        if entry[2]:  # speaker colour replaces the style's text colour
+            text_color = (*entry[2][:3], text_color[3] if len(text_color) > 3 else 255)
+        entry = entry[:2]
     is_capcut = style in CAPCUT_STYLES
     family = STYLE_FAMILY.get(style, "pill")
     is_vertical = height > width
@@ -2229,6 +2234,10 @@ def _export_clip(
             clip_duration_sec=max(0.2, clip.end - clip.start),
             max_words=words_per_line,
         ) or captions
+
+    if burn_captions and render_captions:
+        from workers.tasks.video.speakers import apply_speaker_colors, load_speakers
+        apply_speaker_colors(render_captions, load_speakers(tenant_id, video_id))
 
     if not burn_captions and not needs_template_render:
         # Fast path: stream-copy when no captions and no template overlays

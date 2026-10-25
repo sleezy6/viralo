@@ -46,6 +46,7 @@ from video.schemas import (
     SearchVideoHit,
     VideoListResponse,
     VideoResponse,
+    SpeakersUpdateRequest,
     VideoUpdateRequest,
     YouTubeFormatsResponse,
     YouTubeImportRequest,
@@ -848,6 +849,48 @@ async def update_video(
         video.topic = body.topic
 
     await db.commit()
+    return VideoResponse.model_validate(video)
+
+
+@router.patch("/videos/{video_id}/speakers", response_model=VideoResponse)
+async def update_video_speakers(
+    video_id: uuid.UUID,
+    body: SpeakersUpdateRequest,
+    token: TokenPayload = Depends(get_current_user),
+    db: AsyncSession = Depends(get_tenant_db),
+):
+    """Rename speakers, change their caption colours, or turn speaker colours on/off.
+    Takes effect for clips rendered afterwards (Regenerate → Re-render)."""
+    video = (await db.execute(
+        select(Video).where(Video.id == video_id, Video.tenant_id == uuid.UUID(token.tenant_id), Video.status != "deleted")
+    )).scalar_one_or_none()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found.")
+    meta = video.video_metadata or {}
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except ValueError:
+            meta = {}
+    meta = dict(meta) if isinstance(meta, dict) else {}
+    current = meta.get("speakers") if isinstance(meta.get("speakers"), dict) else None
+    if not current or not current.get("list"):
+        raise HTTPException(status_code=409, detail="No speakers were found in this video's transcript.")
+    lst = [dict(x) for x in current["list"] if isinstance(x, dict)]
+    by_id = {x.get("id"): x for x in lst}
+    for upd in body.speakers:
+        if upd.id not in by_id:
+            raise HTTPException(status_code=422, detail=f"Unknown speaker {upd.id}.")
+        fields = upd.model_fields_set
+        if "name" in fields:
+            by_id[upd.id]["name"] = " ".join((upd.name or "").split()) or None
+        if "color" in fields and upd.color:
+            by_id[upd.id]["color"] = upd.color.upper()
+    colors = current.get("colors", True) is not False if body.colors is None else body.colors
+    meta["speakers"] = {"colors": colors, "list": lst}
+    video.video_metadata = meta
+    await db.commit()
+    await db.refresh(video)
     return VideoResponse.model_validate(video)
 
 

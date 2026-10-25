@@ -221,6 +221,8 @@ export interface VideoResponse {
   source_url?: string | null;
   /** Game the AI was given as background, if any. */
   game?: VideoGame | null;
+  /** Speakers from the transcript, with names and caption colours. */
+  speakers?: VideoSpeakers | null;
 }
 
 export interface VideoGame {
@@ -234,6 +236,8 @@ export interface VideoGame {
 }
 
 export interface SteamGameSuggestion { appid: number; name: string; image: string }
+export interface VideoSpeaker { id: string; name: string | null; color: string }
+export interface VideoSpeakers { colors: boolean; list: VideoSpeaker[] }
 
 export interface PaginatedResponse<T> {
   items: T[];
@@ -444,6 +448,9 @@ export const videoApi = {
     return new EventSource(`${API_BASES.video}/progress/${jobId}?ticket=${encodeURIComponent(ticket)}`);
   },
   captionStyles: () => videoReq<CaptionStyleInfo[]>("GET", "/caption-styles"),
+  /** Rename speakers, change their caption colours, or turn speaker colours on/off. */
+  updateSpeakers: (videoId: string, body: { colors?: boolean; speakers?: Array<{ id: string; name?: string | null; color?: string }> }) =>
+    videoReq<VideoResponse>("PATCH", `/videos/${videoId}/speakers`, body),
   /** Rename a project (video). */
   update: (videoId: string, body: { title?: string; topic?: string }) =>
     videoReq<VideoResponse>("PATCH", `/videos/${videoId}`, body),
