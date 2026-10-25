@@ -1,7 +1,8 @@
 # Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): optional
 # self-hosted Whisper backend (LOCAL_STT_*) tried before Groq; segment-only and
 # no-timestamp servers handled with better timing estimates and logging;
-# LOCAL_STT_LANGUAGE for servers that require a language for timestamps.
+# LOCAL_STT_LANGUAGE (default en) sent for auto-language videos, since some servers
+# require a language for timestamps.
 """
 Video processing pipeline — ClipForge-based.
 PyAV for video I/O (no ffmpeg needed for clip export/audio).
@@ -329,7 +330,8 @@ def _transcribe(source_path: str, duration: float, language: str = "auto",
                     all_words.extend(_translate_chunk(client, audio_bytes, fname, offset, b["translate_model"]))
                     continue
                 next_off = audio_chunks[i + 1][1] if i + 1 < len(audio_chunks) else duration
-                words, chunk_lang = _transcribe_chunk(client, audio_bytes, fname, offset, language,
+                req_lang = language if language != "auto" else (b.get("default_language") or "auto")
+                words, chunk_lang = _transcribe_chunk(client, audio_bytes, fname, offset, req_lang,
                                                       b["model"], chunk_dur=max(next_off - offset, 0.0),
                                                       fallback_language=b.get("fallback_language"))
                 # Use first chunk's detected language (most reliable — full audio context)
@@ -383,6 +385,11 @@ def _transcribe(source_path: str, duration: float, language: str = "auto",
     return [], ""
 
 
+def _local_stt_language() -> str | None:
+    val = os.getenv("LOCAL_STT_LANGUAGE", "en").strip().lower()
+    return None if val in ("", "auto") else val
+
+
 def _stt_backends() -> list[dict]:
     """Transcription backends in order: a self-hosted OpenAI-compatible server first
     (e.g. Unsloth with a Whisper model loaded), then each configured Groq key."""
@@ -405,8 +412,12 @@ def _stt_backends() -> list[dict]:
                              timeout=timeout, max_retries=0),
             "model": model,
             "translate_model": model,
-            # Used only when the server refuses timestamps without a language.
-            "fallback_language": os.getenv("LOCAL_STT_LANGUAGE", "en").strip() or None,
+            # LOCAL_STT_LANGUAGE (default "en") is sent up front for auto-language videos:
+            # models that can't detect language (e.g. MOSS) make Unsloth reject requests
+            # without one. Set it to "auto" for models that detect language themselves;
+            # a refusal then still falls back to "en".
+            "default_language": _local_stt_language(),
+            "fallback_language": "en",
             "local": True,
         })
 
