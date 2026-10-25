@@ -5,8 +5,10 @@ A clip keeps its id, schedule and storage key. Re-rendering goes through the sam
 _export_clip path as the pipeline (current caption, emoji and hook code), updating
 the clip in place; the old video stays playable until the new upload lands.
 """
+import json
 import logging
 import os
+import re
 from pathlib import Path
 
 from sqlalchemy import text
@@ -15,7 +17,9 @@ from workers.celery_app import celery_app
 from workers.tasks.video._core import (
     CAPCUT_STYLES,
     VIDEO_TEMP_DIR,
+    CaptionSegment,
     ClipResult,
+    WordTimestamp,
     _effective_caption_style,
     _get_session,
     _load_transcript_words,
@@ -71,6 +75,78 @@ def _set_status(tenant_id: str, clip_id: str, status: str, error: str | None = N
         )
 
 
+def _norm_word(w: str) -> str:
+    return re.sub(r"[^\w]+", "", (w or "").lower())
+
+
+def _segment_from_text(text_: str, start: float, end: float, words: list, base: float) -> CaptionSegment:
+    """One caption from text the user wrote, `start`/`end` in seconds of the original
+    video. Word timings come from the transcript when the words still match it (so
+    highlighted-word styles stay in sync); otherwise they're spread over the caption
+    by word length. Times in the result are relative to `base` (the clip start)."""
+    toks = text_.split()
+    spoken = [w for w in words if w.start >= start - 0.3 and w.end <= end + 0.3]
+    keyed = [(i, _norm_word(t)) for i, t in enumerate(toks) if _norm_word(t)]
+    times: list[tuple[float, float] | None] = [None] * len(toks)
+    if keyed and [k for _, k in keyed] == [_norm_word(w.word) for w in spoken]:
+        for (i, _), w in zip(keyed, spoken):
+            times[i] = (min(max(w.start, start), end), min(max(w.end, start), end))
+        last = (start, start)
+        for i in range(len(toks)):  # emoji and other symbols ride along with the word before
+            times[i] = times[i] or last
+            last = times[i]
+    else:
+        weights = [len(t) + 1 for t in toks] or [1]
+        total, t = float(sum(weights)), start
+        for i, wgt in enumerate(weights[: len(toks)]):
+            d = (end - start) * wgt / total
+            times[i] = (t, t + d)
+            t += d
+    seg_words = [WordTimestamp(tok, max(0.0, a - base), max(0.0, b - base))
+                 for tok, (a, b) in zip(toks, times)]
+    return CaptionSegment(text=" ".join(toks), start=max(0.0, start - base),
+                          end=max(0.0, end - base), words=seg_words)
+
+
+def _build_captions(words: list, clip: ClipResult, max_words: int, custom: dict | None) -> list:
+    """Captions for a clip: the user's edited captions where they edited them
+    (custom["range"], seconds of the original video), the transcript elsewhere."""
+    from workers.tasks.video.render import _generate_captions
+    auto = _generate_captions(words, clip, max_words=max_words)
+    if not custom or "items" not in custom:
+        return auto
+    lo, hi = custom.get("range") or (clip.start, clip.end)
+    segs = []
+    for it in custom["items"]:
+        s, e = max(float(it["start"]), clip.start), min(float(it["end"]), clip.end)
+        if e - s >= 0.05 and str(it.get("text", "")).strip():
+            segs.append(_segment_from_text(str(it["text"]).strip(), s, e, words, clip.start))
+    for seg in auto:  # transcript captions only outside the part the user edited
+        mid = clip.start + (seg.start + seg.end) / 2
+        if mid < lo or mid > hi:
+            segs.append(seg)
+    return sorted(segs, key=lambda c: c.start)
+
+
+def _save_applied_edits(tenant_id: str, clip_id: str, custom: dict, shift_sec: float,
+                        old_editor: dict | None) -> None:
+    """After the editor's edits are applied: remember the edited captions (so later
+    re-renders keep them) and reset the editor to the new clip, shifting sound-effect
+    markers by how far the start moved. Captions reload from the new caption file."""
+    markers = []
+    for m in (old_editor or {}).get("markers") or []:
+        t = int(m.get("time_ms", 0) - shift_sec * 1000)
+        if t >= 0:
+            markers.append({**m, "time_ms": t})
+    editor = {"trim_start_sec": 0, "trim_end_sec": None, "captions": [], "markers": markers}
+    with _get_session(tenant_id) as session:
+        session.execute(
+            text("""UPDATE clips SET metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:m AS jsonb),
+                           updated_at = NOW() WHERE id = CAST(:id AS uuid)"""),
+            {"id": clip_id, "m": json.dumps({"custom_captions": custom, "editor": editor})},
+        )
+
+
 def _save_new_timing(tenant_id: str, clip_id: str, start: float, end: float, start_moved: bool) -> None:
     """Store a re-cut clip's new place in the original video. Saved editor trims no
     longer fit: a moved start shifts every editor timing, so those edits are dropped;
@@ -104,7 +180,7 @@ def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
         raise ValueError(f"mode must be one of {REGEN_MODES}")
     from workers.tasks.video.ai import _batch_ai_content
     from workers.tasks.video.pipeline import _resolve_pipeline_language
-    from workers.tasks.video.render import _export_clip, _generate_captions
+    from workers.tasks.video.render import _export_clip
     from workers.tasks.video.tasks import upload_clip_to_storage
     from workers.tasks.video.transcribe import _probe_video
 
@@ -171,7 +247,11 @@ def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
                     platform=row.platform or "tiktok",
                     hook_score=float(signals.get("hook_score") or 0.0),
                 )
-                captions = _generate_captions(words, clip, max_words=words_per_line)
+                applied = None  # editor edits being applied: {"range", "items"} in source seconds
+                if timing and isinstance(timing.get("captions"), list):
+                    applied = {"range": [start, end], "items": timing["captions"]}
+                custom = applied or cmeta.get("custom_captions")
+                captions = _build_captions(words, clip, words_per_line, custom)
                 ai_content = {
                     "title": cmeta.get("ai_title") or clip.title,
                     "platforms": cmeta.get("platforms") or {},
@@ -227,6 +307,9 @@ def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
                 if (start, end) != (float(row.start_sec), float(row.end_sec)):
                     _save_new_timing(tenant_id, cid, start, end,
                                      start_moved=abs(start - float(row.start_sec)) >= 0.05)
+                if applied is not None:
+                    _save_applied_edits(tenant_id, cid, applied, shift_sec=start - float(row.start_sec),
+                                        old_editor=cmeta.get("editor") if isinstance(cmeta, dict) else None)
                 # Same hand-off as the pipeline: upload replaces the stored file and
                 # flips the clip back to "ready"; job_id = video id, like retry-upload.
                 upload_clip_to_storage.delay(cid, clip_path, tenant_id, video_id)

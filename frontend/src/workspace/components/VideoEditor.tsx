@@ -1,4 +1,4 @@
-// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): editor preview size fix, poster, preload and load errors.
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): editor preview size fix, poster, preload and load errors; Apply to clip.
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
@@ -206,10 +206,13 @@ export function VideoEditor({
   clip,
   onClose,
   onPost,
+  onApplied,
 }: {
   clip: ClipApiResponse;
   onClose: () => void;
   onPost?: () => void;
+  /** Called with the clip (now re-rendering) after "Apply to clip". */
+  onApplied?: (clip: ClipApiResponse) => void;
 }) {
   /* ─── Refs ─── */
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -383,16 +386,39 @@ export function VideoEditor({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clip.id]);
 
-  /* ─── Save ─── */
-  async function handleSave() {
-    setSaving(true); setSaveStatus("idle");
-    const editorData: EditorData = {
+  /* ─── Apply: re-render the clip itself with this trim and these captions ─── */
+  const [applying, setApplying] = useState(false);
+  const [applyError, setApplyError] = useState("");
+  async function handleApply() {
+    setApplying(true); setApplyError("");
+    try {
+      await videoApi.saveEditorData(clip.id, editorData()).catch(() => {});  // keep a draft if the render fails
+      const updated = await videoApi.applyEdits(clip.id, {
+        trim_start_sec: trimStart,
+        trim_end_sec: trimEnd || null,
+        captions: captions.map((c) => ({ text: c.text, start_sec: c.startSec, end_sec: c.endSec })),
+      });
+      onApplied?.(updated);
+      onClose();
+    } catch (e) {
+      setApplyError(e instanceof Error ? e.message : "Couldn't apply the edits. Try again.");
+    } finally { setApplying(false); }
+  }
+
+  function editorData(): EditorData {
+    return {
       trim_start_sec: trimStart, trim_end_sec: trimEnd || null,
       captions: captions.map((c) => ({ id: c.id, text: c.text, start_sec: c.startSec, end_sec: c.endSec, position: c.position, color: c.color, font_size: c.fontSize, template: c.template })),
       markers: markers.map((m) => ({ id: m.id, time_ms: m.timeMs, sound: m.sound, emoji: m.emoji, label: m.label })),
     };
+  }
+
+  /* ─── Save ─── */
+  async function handleSave() {
+    setSaving(true); setSaveStatus("idle");
+    const editorData_ = editorData();
     try {
-      await videoApi.saveEditorData(clip.id, editorData);
+      await videoApi.saveEditorData(clip.id, editorData_);
       setSaveStatus("ok"); setTimeout(() => setSaveStatus("idle"), 3000);
     } catch {
       setSaveStatus("err"); setTimeout(() => setSaveStatus("idle"), 3000);
@@ -483,6 +509,9 @@ export function VideoEditor({
 
         {/* Right: actions */}
         <div className="flex items-center gap-2">
+          {applyError && (
+            <span role="alert" title={applyError} className="max-w-[260px] truncate text-[11.5px] text-red-400">{applyError}</span>
+          )}
           <button
             onClick={handleSave}
             disabled={saving}
@@ -498,6 +527,17 @@ export function VideoEditor({
               : saveStatus === "ok" ? "✓ Saved"
               : saveStatus === "err" ? "Failed"
               : <><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save</>}
+          </button>
+
+          <button
+            onClick={handleApply}
+            disabled={saving || applying}
+            title="Re-render this clip with the trim and captions you set here"
+            className="flex items-center gap-1.5 rounded-lg bg-[#ff3d6a] px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-[0_2px_12px_rgba(255,61,106,.3)] transition hover:brightness-110 disabled:opacity-60 cursor-pointer"
+          >
+            {applying
+              ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" /> Applying</>
+              : <>✦ Apply to clip</>}
           </button>
 
           {onPost && (

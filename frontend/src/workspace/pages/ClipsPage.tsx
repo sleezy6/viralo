@@ -1,3 +1,4 @@
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): editor Apply to clip.
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1368,6 +1369,7 @@ export function ClipsPage() {
         <VideoEditor
           clip={editClip}
           onClose={() => setEditClip(null)}
+          onApplied={(updated) => setClips((prev) => prev.map((c) => c.id === updated.id ? updated : c))}
           onPost={() => { setSelectedId(editClip.id); setPublishOpen(true); setEditClip(null); }}
         />
       )}

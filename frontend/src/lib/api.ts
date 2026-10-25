@@ -483,6 +483,10 @@ export const videoApi = {
   },
   patchClip: (clipId: string, patch: { tags?: string[]; platform_copy?: Record<string, { description: string; tags: string[] }> }) =>
     videoReq<ClipApiResponse>("PATCH", `/clips/${clipId}`, patch),
+  /** Re-render the clip itself with the editor's trim and caption text/timing. */
+  applyEdits: (clipId: string, body: { trim_start_sec: number; trim_end_sec: number | null;
+    captions: Array<{ text: string; start_sec: number; end_sec: number }> }) =>
+    videoReq<ClipApiResponse>("POST", `/clips/${clipId}/apply-edits`, body),
   saveEditorData: (clipId: string, data: EditorData) =>
     videoReq<EditorDataResponse>("PATCH", `/clips/${clipId}/editor`, data),
   getEditorData: (clipId: string) =>

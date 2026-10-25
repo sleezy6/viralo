@@ -1734,6 +1734,60 @@ async def regenerate_clip(
     return clip
 
 
+class _AppliedCaption(_BaseModel):
+    text: str = Field(max_length=500)
+    start_sec: float = Field(ge=0)
+    end_sec: float = Field(ge=0)
+
+
+class ApplyEditsRequest(_BaseModel):
+    """The editor's trim and captions, in seconds of the current clip."""
+    trim_start_sec: float = Field(default=0, ge=0)
+    trim_end_sec: float | None = Field(default=None, ge=0)
+    captions: list[_AppliedCaption] = Field(default_factory=list, max_length=1000)
+
+
+@router.post("/clips/{clip_id}/apply-edits", response_model=ClipResponse, status_code=status.HTTP_202_ACCEPTED)
+async def apply_clip_edits(
+    clip_id: uuid.UUID,
+    body: ApplyEditsRequest,
+    token: TokenPayload = Depends(get_current_user),
+    db: AsyncSession = Depends(get_tenant_db),
+):
+    """Re-render a clip with the editor's trim and caption text/timing, in place, using
+    the clip's own caption style. The cut is made from the original video, so the old
+    burned-in captions don't show through."""
+    clip = (await db.execute(
+        select(Clip).where(Clip.id == clip_id, Clip.tenant_id == uuid.UUID(token.tenant_id),
+                           Clip.status != "deleted")
+    )).scalar_one_or_none()
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found.")
+    if clip.status not in _REGEN_READY_STATUSES:
+        raise HTTPException(status_code=409, detail=f"Clip is busy ({clip.status}); try again when it's ready.")
+    if clip.start_sec is None or clip.end_sec is None:
+        raise HTTPException(status_code=422, detail="This clip has no position in the original video, so it can't be re-cut.")
+    base, length = float(clip.start_sec), float(clip.end_sec) - float(clip.start_sec)
+    ts = min(body.trim_start_sec, length)
+    te = min(body.trim_end_sec if body.trim_end_sec is not None else length, length)
+    if te - ts < 1:
+        raise HTTPException(status_code=422, detail="The trimmed clip must be at least 1 second long.")
+    start, end = round(base + ts, 2), round(base + te, 2)
+    items = []
+    for c in body.captions:
+        text_ = " ".join(c.text.split())
+        s, e = max(base + c.start_sec, start), min(base + c.end_sec, end)
+        if text_ and e - s >= 0.05:
+            items.append({"text": text_, "start": round(s, 3), "end": round(e, 3)})
+    items.sort(key=lambda it: it["start"])
+    clip.status = "regenerating"
+    await db.commit()
+    await db.refresh(clip)
+    _queue_regenerate(token.tenant_id, str(clip.video_id), [str(clip.id)], "render",
+                      {"start": start, "end": end, "captions": items})
+    return clip
+
+
 @router.post("/videos/{video_id}/regenerate", status_code=status.HTTP_202_ACCEPTED)
 async def regenerate_video_clips(
     video_id: uuid.UUID,

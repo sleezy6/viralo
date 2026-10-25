@@ -674,6 +674,7 @@ export function ClipCard({ clip, idx, selected = false, onToggleSelect, isPosted
           clip={localClip}
           onClose={() => setShowEditor(false)}
           onPost={() => setShowPublish(true)}
+          onApplied={(updated) => { setLocalClip(updated); onRegenerated?.(); }}
         />
       )}
 
