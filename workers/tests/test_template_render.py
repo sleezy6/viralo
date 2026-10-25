@@ -1,3 +1,4 @@
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): hook text tests.
 """Tests for the occasion-aware template system and audio mixing."""
 import subprocess
 from pathlib import Path
@@ -167,6 +168,27 @@ class TestMakeHookText:
     def test_max_38_chars(self):
         long = "a " * 30
         assert len(_make_hook_text(long)) <= 38
+
+    # Natural-break behaviour (sleezy6 fork)
+    def test_short_title_kept_whole(self):
+        assert _make_hook_text("He forgot the power bill") == "HE FORGOT THE POWER BILL"
+
+    def test_does_not_end_on_dangling_word(self):
+        result = _make_hook_text("They really tried to hide in the walls")
+        assert result == "THEY REALLY TRIED TO HIDE…"
+
+    def test_cuts_at_sentence_end(self):
+        result = _make_hook_text("Power's out. Now they have to record in the dark")
+        assert result == "POWER'S OUT."
+
+    def test_cuts_at_clause_break(self):
+        result = _make_hook_text("No power, no money, just chaos in the dark room tonight")
+        assert result == "NO POWER, NO MONEY…"
+
+    def test_keeps_trailing_emoji(self):
+        result = _make_hook_text("They really tried to hide in the walls 💀")
+        assert result.endswith(" 💀") and "…" in result
+        assert len(result.split()) <= 6 and len(result) <= 38
 
 
 @video_only

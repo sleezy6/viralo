@@ -2,6 +2,7 @@
 # burned-in captions and hook titles (Noto Color Emoji sprites, silhouettes for
 # outlines); hook red circle only for templates with "hook_circle" (sports).
 # Caption/hook text aligned inside its boxes and pills; hook title fits the frame.
+# Hook text cut at natural breaks instead of mid-phrase.
 """
 Video processing pipeline — ClipForge-based.
 PyAV for video I/O (no ffmpeg needed for clip export/audio).
@@ -803,14 +804,79 @@ def _draw_caption(img, t: float, caption_timeline: dict, style: str, width: int,
     return img
 
 
+_HOOK_MAX_WORDS = 6
+_HOOK_MAX_CHARS = 38
+# Words a teaser should not end on ("...TRIED TO HIDE IN" reads as cut off).
+_HOOK_WEAK_ENDINGS = {
+    "a", "an", "the", "to", "in", "on", "at", "of", "for", "from", "with", "by", "into",
+    "onto", "about", "and", "or", "but", "so", "as", "if", "than", "that", "this", "these",
+    "those", "my", "your", "our", "their", "his", "her", "its", "is", "are", "was", "were",
+    "be", "been", "just", "very", "really", "when", "while", "who", "what", "which", "i",
+    "we", "you", "they", "he", "she", "it", "not", "no", "up", "out", "off", "over",
+}
+_HOOK_BREAK_END = (".", "!", "?", "…")
+_HOOK_BREAK_MID = (",", ";", ":", "—", "–", "-")
+
+
+def _is_emoji_token(tok: str) -> bool:
+    return bool(tok) and all(_is_emoji_cp(ord(c)) or ord(c) in _EMOJI_JOINERS for c in tok)
+
+
 def _make_hook_text(title: str, viral_type: str = "") -> str:
-    """Derive a short punchy hook text for the first-frame overlay from the clip title."""
-    if not title:
+    """Short punchy hook for the first-frame overlay, from the clip title.
+
+    Keeps the original limits (6 words, 38 chars) but cuts at a natural break: the
+    whole title if it fits, else the last sentence/clause boundary, else a word
+    boundary that doesn't end on a dangling word ("in", "to", "the"), marked with
+    an ellipsis. A trailing emoji in the title is kept.
+    """
+    words = (title or "").split()
+    if not words:
         return ""
-    words = title.split()[:6]
-    text = " ".join(words).upper()
-    # Cap at 38 chars for readability
-    return text[:38]
+    tail = ""
+    while words and _is_emoji_token(words[-1]):
+        tail = tail or words[-1]
+        words.pop()
+    if not words:
+        return tail
+    max_words = _HOOK_MAX_WORDS - (1 if tail else 0)
+    max_chars = _HOOK_MAX_CHARS - (len(tail) + 1 if tail else 0)
+
+    def fits(ws: list[str], extra: int = 0) -> bool:
+        return len(ws) <= max_words and len(" ".join(ws)) + extra <= max_chars
+
+    if fits(words):
+        body = " ".join(words)
+    else:
+        k_max = 0
+        for k in range(min(len(words), max_words), 0, -1):
+            if fits(words[:k], extra=1):  # room for the ellipsis
+                k_max = k
+                break
+        body = ""
+        # 1) last sentence end, then clause break, within what fits (at least 2 words)
+        for ends in (_HOOK_BREAK_END, _HOOK_BREAK_MID):
+            for k in range(k_max, 1, -1):
+                if words[k - 1].endswith(ends):
+                    cut = " ".join(words[:k])
+                    if ends is _HOOK_BREAK_END:
+                        body = cut
+                    else:
+                        body = cut.rstrip("".join(_HOOK_BREAK_MID)) + "…"
+                    break
+            if body:
+                break
+        # 2) word boundary, dropping dangling words
+        if not body and k_max >= 1:
+            k = k_max
+            while k > 2 and words[k - 1].lower().strip(".,;:!?\"'") in _HOOK_WEAK_ENDINGS:
+                k -= 1
+            body = " ".join(words[:k]).rstrip("".join(_HOOK_BREAK_MID)) + "…"
+        # 3) a single word longer than the limit
+        if not body:
+            body = words[0][: max(1, max_chars - 1)] + "…"
+    text = (body + (" " + tail if tail else "")).upper()
+    return text
 
 
 def _draw_hook_overlay(img, t_in_clip: float, hook_text: str, hook_duration_sec: float, width: int, height: int,
