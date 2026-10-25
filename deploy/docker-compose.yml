@@ -596,9 +596,14 @@ services:
         max-size: 50m
         max-file: '3'
     command: celery -A workers.celery_app worker -Q viralo.video.pipeline --concurrency=2 --loglevel=info
+    # Intel GPU (Quick Sync) for encoding clips; remove these two lines if this
+    # machine has no /dev/dri. VIDEO_HWACCEL=off forces CPU encoding.
+    devices:
+    - /dev/dri:/dev/dri
     mem_limit: 8g
     memswap_limit: 8g
     environment:
+      VIDEO_HWACCEL: ${VIDEO_HWACCEL:-auto}
       DATABASE_URL: postgresql+asyncpg://viralo:${POSTGRES_PASSWORD}@postgres:5432/viralo
       REDIS_URL: redis://redis:6379/0
       RABBITMQ_URL: amqp://viralo:${RABBITMQ_PASS}@rabbitmq:5672//
@@ -683,9 +688,14 @@ services:
         max-size: 50m
         max-file: '3'
     command: celery -A workers.celery_app worker -Q viralo.video.ai --concurrency=1 --loglevel=info
+    # Intel GPU (Quick Sync) for encoding clips; remove these two lines if this
+    # machine has no /dev/dri. VIDEO_HWACCEL=off forces CPU encoding.
+    devices:
+    - /dev/dri:/dev/dri
     mem_limit: 8g
     memswap_limit: 8g
     environment:
+      VIDEO_HWACCEL: ${VIDEO_HWACCEL:-auto}
       DATABASE_URL: postgresql+asyncpg://viralo:${POSTGRES_PASSWORD}@postgres:5432/viralo
       REDIS_URL: redis://redis:6379/0
       RABBITMQ_URL: amqp://viralo:${RABBITMQ_PASS}@rabbitmq:5672//
@@ -857,9 +867,14 @@ services:
         max-size: 50m
         max-file: '3'
     command: celery -A workers.celery_app worker -Q viralo.video.generate --concurrency=1 --loglevel=info
+    # Intel GPU (Quick Sync) for encoding clips; remove these two lines if this
+    # machine has no /dev/dri. VIDEO_HWACCEL=off forces CPU encoding.
+    devices:
+    - /dev/dri:/dev/dri
     mem_limit: 4g
     memswap_limit: 4g
     environment:
+      VIDEO_HWACCEL: ${VIDEO_HWACCEL:-auto}
       DATABASE_URL: postgresql+asyncpg://viralo:${POSTGRES_PASSWORD}@postgres:5432/viralo
       REDIS_URL: redis://redis:6379/0
       RABBITMQ_URL: amqp://viralo:${RABBITMQ_PASS}@rabbitmq:5672//

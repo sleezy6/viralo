@@ -1723,7 +1723,20 @@ def _render_clip_streamcopy(
         raise RuntimeError(f"ffmpeg render failed (rc={result.returncode}): {excerpt}")
 
 
-def _render_clip_ffmpeg_captions(
+def _render_clip_ffmpeg_captions(*args, **kwargs) -> None:
+    """Render a clip; if the GPU encoder fails, turn it off and redo the clip on the CPU."""
+    from workers.tasks.video import hwaccel
+    try:
+        return _render_clip_ffmpeg_captions_impl(*args, **kwargs)
+    except Exception as e:
+        st = hwaccel.status()
+        if not (st["pyav"] or st["ffmpeg"]):
+            raise
+        hwaccel.disable(str(e))
+        return _render_clip_ffmpeg_captions_impl(*args, **kwargs)
+
+
+def _render_clip_ffmpeg_captions_impl(
     source_path: str,
     clip: ClipResult,
     output_path: str,
@@ -1844,6 +1857,10 @@ def _render_clip_ffmpeg_captions(
         else:
             filter_complex = v_chain
 
+    from workers.tasks.video.hwaccel import ffmpeg_encoder_args
+    _pass1_video_args = ffmpeg_encoder_args(18, "ultrafast")  # Intel Quick Sync or libx264
+    if "libx264" in _pass1_video_args:
+        _pass1_video_args = _pass1_video_args + ["-profile:v", "baseline"]
     cmd1 = [
         "ffmpeg", "-y",
         "-threads", "2",
@@ -1851,11 +1868,7 @@ def _render_clip_ffmpeg_captions(
         "-i", source_path,
         "-filter_complex", filter_complex,
         *maps,
-        "-c:v", "libx264",
-        "-crf", "18",
-        "-preset", "ultrafast",
-        "-profile:v", "baseline",
-        "-pix_fmt", "yuv420p",
+        *_pass1_video_args,
         "-c:a", "aac",
         "-b:a", "256k",
         "-avoid_negative_ts", "make_zero",
@@ -1975,16 +1988,13 @@ def _render_clip(
     # movflags is a muxer (container) option: set on the encoder stream, as before, it
     # was ignored and every caption-burned clip had its index at the end of the file.
     with av.open(output_path, "w", format="mp4", options={"movflags": "+faststart"}) as dst:
-        out_v = dst.add_stream("h264", rate=fps_int)
+        from workers.tasks.video.hwaccel import pyav_encoder
+        v_codec, v_pix, v_opts = pyav_encoder(VIDEO_CRF, "veryfast")  # Intel Quick Sync or libx264
+        out_v = dst.add_stream(v_codec, rate=fps_int)
         out_v.width = target_width
         out_v.height = target_height
-        out_v.pix_fmt = "yuv420p"
-        out_v.options = {
-            "crf": str(VIDEO_CRF),
-            "preset": "veryfast",
-            "profile:v": "high",
-            "level": "4.2",
-        }
+        out_v.pix_fmt = v_pix
+        out_v.options = v_opts if v_codec != "h264" else {**v_opts, "profile:v": "high", "level": "4.2"}
 
         with av.open(source_path) as src:
             v_stream = next((s for s in src.streams if s.type == "video"), None)
@@ -2058,10 +2068,10 @@ def _render_clip(
                             new_frame = av.VideoFrame.from_image(img)
                             del img  # free PIL buffer before encode
                         else:
-                            # Fast path: reformat in yuv420p directly — zero PIL overhead
+                            # Fast path: reformat straight to the encoder's format — zero PIL overhead
                             new_frame = frame.reformat(
                                 width=target_width, height=target_height,
-                                format="yuv420p",
+                                format=v_pix,
                             )
 
                         new_frame.pts = out_pts

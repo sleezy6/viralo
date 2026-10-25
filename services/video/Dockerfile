@@ -8,6 +8,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto-cjk fonts-noto-core fonts-noto-color-emoji fonts-noto-extra \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/nodejs /usr/local/bin/node
+# Intel GPU video encoding (Quick Sync) — sleezy6 fork. The iHD driver with
+# encoders lives in Debian's non-free section; libmfx-gen is the oneVPL runtime the
+# h264_qsv encoder uses on 12th-gen-and-newer Intel graphics. Unused (CPU encoding)
+# unless the container is given /dev/dri. See workers/tasks/video/hwaccel.py.
+RUN sed -i 's/^Components: main$/Components: main non-free/' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update && apt-get install -y --no-install-recommends \
+       intel-media-va-driver-non-free libmfx-gen1.2 vainfo \
+    && rm -rf /var/lib/apt/lists/*
+ENV LIBVA_DRIVER_NAME=iHD \
+    LIBVA_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri
 # Deno: yt-dlp's default JS runtime for solving YouTube's n-challenge. Without a
 # JS runtime, tv/web clients return no formats ("No supported JavaScript runtime
 # could be found. Only deno is enabled by default"). Installed to /usr/local/bin
