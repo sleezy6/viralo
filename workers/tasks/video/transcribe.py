@@ -209,6 +209,10 @@ def _translate_chunk(groq_client, audio_bytes: bytes, filename: str, offset: flo
     return _parse_words(response, offset)
 
 
+# Models (by name) whose server refused timestamped output without a language.
+_NEEDS_LANGUAGE: set[str] = set()
+
+
 def _transcribe_chunk(groq_client, audio_bytes: bytes, filename: str, offset: float, language: str,
                       model: str = GROQ_WHISPER_MODEL,
                       chunk_dur: float | None = None,
@@ -224,7 +228,12 @@ def _transcribe_chunk(groq_client, audio_bytes: bytes, filename: str, offset: fl
     # or reject the word request, so fall back to segment-only before giving up timing.
     # Some also refuse timestamped output unless told the language (models that don't
     # detect it, e.g. MOSS via Unsloth), so retry those with the configured fallback.
-    attempts = [(lang, g) for g in (["word", "segment"], ["segment"])]
+    # Once a model has refused a language-less request, skip straight to the
+    # fallback language instead of repeating two failing calls every chunk.
+    first_lang = lang
+    if lang is None and fallback_language and model in _NEEDS_LANGUAGE:
+        first_lang = fallback_language
+    attempts = [(first_lang, g) for g in (["word", "segment"], ["segment"])]
     for try_lang, granularities in attempts:
         try:
             response = groq_client.audio.transcriptions.create(
@@ -235,6 +244,10 @@ def _transcribe_chunk(groq_client, audio_bytes: bytes, filename: str, offset: fl
                 timestamp_granularities=granularities,
             )
             used_lang = try_lang
+            if lang is None and try_lang and try_lang == fallback_language and model not in _NEEDS_LANGUAGE:
+                _NEEDS_LANGUAGE.add(model)
+                logging.info(f"[Whisper] {model} needs a language for timestamps — "
+                             f"using '{fallback_language}' for auto-language videos from now on")
             break
         except Exception as e:
             msg = str(e)
