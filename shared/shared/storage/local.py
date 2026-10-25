@@ -1,4 +1,4 @@
-# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): added download().
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): added download(), URL-form delete, streamed upload.
 import os
 import hashlib
 import hmac
@@ -53,12 +53,14 @@ class LocalStorageAdapter(StorageAdapter):
     async def upload(self, data, path: str, content_type: str = "video/mp4") -> str:
         full_path = _safe_local_path(path)
         full_path.parent.mkdir(parents=True, exist_ok=True)
-        if isinstance(data, bytes):
-            content = data
-        else:
-            content = data.read()
         async with aiofiles.open(full_path, "wb") as f:
-            await f.write(content)
+            if isinstance(data, bytes):
+                await f.write(data)
+            else:
+                # Stream in 8 MB pieces: reading a whole upload (often >1 GB) into
+                # memory first could fail on small machines and leave a partial file.
+                while chunk := data.read(8 * 1024 * 1024):
+                    await f.write(chunk)
         return f"/storage/{path.lstrip('/')}"
 
     async def get_signed_url(self, path: str, expires_in: int = 3600) -> str:
@@ -79,6 +81,20 @@ class LocalStorageAdapter(StorageAdapter):
         shutil.copyfile(src, dest_path)
 
     async def delete(self, path: str) -> None:
-        full_path = _safe_local_path(path)
-        if full_path.exists():
+        """Delete a stored file. Accepts a storage key ("originals/a.mp4") or the URL
+        upload() returned ("/storage/originals/a.mp4", optionally signed); the URL
+        form used to be rejected as an absolute path, so deletes silently did nothing."""
+        from urllib.parse import unquote, urlsplit
+        relative = unquote(urlsplit(path).path).removeprefix("/storage/").lstrip("/")
+        full_path = _safe_local_path(relative)
+        if full_path.is_file():
             full_path.unlink()
+        # Drop folders the file leaves empty (e.g. originals/<account>/<project>/).
+        base = Path(LOCAL_STORAGE_DIR).resolve()
+        parent = full_path.parent
+        while parent != base and base in parent.parents:
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent

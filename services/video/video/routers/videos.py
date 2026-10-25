@@ -3,6 +3,7 @@ import asyncio
 import functools
 import io
 import json
+import logging
 import os
 import re
 import subprocess
@@ -119,6 +120,7 @@ def _ytdlp_fetch_json(url: str, timeout: int = 30) -> dict:
     raise RuntimeError(last_err)
 
 
+log = logging.getLogger(__name__)
 router = APIRouter(tags=["video"])
 
 
@@ -1086,8 +1088,9 @@ async def delete_video(
         try:
             from shared.storage.base import get_storage
             await get_storage(os.getenv("STORAGE_PROVIDER", "local")).delete(video.original_storage_key)
-        except Exception:
-            freed = 0  # already gone (older installs deleted it after processing)
+        except Exception as e:
+            log.warning("Could not delete original %s: %s", video.original_storage_key, e)
+            freed = 0
         if freed:
             # The "Cloud Storage" counter counts uploaded originals; it only ever went up.
             try:
