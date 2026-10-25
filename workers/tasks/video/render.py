@@ -1,3 +1,5 @@
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): colour emoji in
+# burned-in captions (Noto Color Emoji bitmap sprites, silhouettes for outlines).
 """
 Video processing pipeline — ClipForge-based.
 PyAV for video I/O (no ffmpeg needed for clip export/audio).
@@ -222,21 +224,135 @@ def _load_font_for_char(char: str, size: int):
         return _load_font(size)
 
 
+# ── Emoji support ────────────────────────────────────────────────────────────
+# Noto Color Emoji is a bitmap (CBDT) font: Pillow only opens it at its built-in
+# strike size (109) and only draws it in colour with embedded_color=True. Loading it
+# at caption size failed, fell back to the text font, and emojis came out as boxes.
+# Emoji runs are therefore rendered once at 109px, scaled, and pasted as sprites.
+_EMOJI_STRIKE = 109
+_EMOJI_JOINERS = {0x200D, 0xFE0F, 0xFE0E, 0x20E3}
+
+
+def _is_emoji_cp(o: int) -> bool:
+    return (0x1F000 <= o <= 0x1FAFF or 0x2600 <= o <= 0x27BF or 0x2300 <= o <= 0x23FF
+            or 0x2B00 <= o <= 0x2BFF or 0xE0020 <= o <= 0xE007F)
+
+
+def _split_emoji_runs(text: str) -> list[tuple[str, bool]]:
+    """Split text into (run, is_emoji). ZWJ / variation selectors / skin tones stay
+    attached to their emoji so sequences like 👍🏽 or 👨‍👩‍👧 render as one glyph."""
+    runs: list[tuple[str, bool]] = []
+    buf, buf_emoji = "", False
+    for ch in text:
+        o = ord(ch)
+        is_e = _is_emoji_cp(o) or (o in _EMOJI_JOINERS and buf_emoji)
+        if o in _EMOJI_JOINERS and not buf_emoji:
+            continue  # stray invisible joiner: drawing it produced a box
+        if buf and is_e != buf_emoji:
+            runs.append((buf, buf_emoji))
+            buf = ""
+        buf += ch
+        buf_emoji = is_e
+    if buf:
+        runs.append((buf, buf_emoji))
+    return runs
+
+
+@_lru_cache(maxsize=1)
+def _emoji_font_path() -> str | None:
+    for path in FONT_PATHS:
+        if "emoji" in path.lower() and os.path.isfile(path):
+            return path
+    return None
+
+
+@_lru_cache(maxsize=512)
+def _emoji_sprite(run: str, size: int):
+    """Colour RGBA image of an emoji run, scaled to sit on a line of text at `size`."""
+    path = _emoji_font_path()
+    if not path:
+        return None
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        font = ImageFont.truetype(path, _EMOJI_STRIKE)
+        bb = font.getbbox(run, mode="RGBA")  # (drawing, not measuring, takes embedded_color)
+        if not bb or bb[2] - bb[0] <= 0:
+            return None
+        w, h = bb[2] - bb[0], bb[3] - bb[1]
+        im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        ImageDraw.Draw(im).text((-bb[0], -bb[1]), run, font=font, embedded_color=True)
+        if im.getbbox() is None:
+            return None  # font has no glyph for this sequence
+        target_h = max(1, int(size * 1.05))
+        target_w = max(1, round(w * target_h / h))
+        return im.resize((target_w, target_h), resample=Image.LANCZOS)
+    except Exception:
+        return None
+
+
+@_lru_cache(maxsize=512)
+def _emoji_silhouette(run: str, size: int, fill: tuple):
+    """Solid-colour version of the sprite for outline / shadow / glow passes."""
+    sprite = _emoji_sprite(run, size)
+    if sprite is None:
+        return None
+    from PIL import Image
+    alpha = sprite.getchannel("A")
+    a = fill[3] if len(fill) > 3 else 255
+    if a < 255:
+        alpha = alpha.point(lambda v: v * a // 255)
+    solid = Image.new("RGBA", sprite.size, (*fill[:3], 255))
+    solid.putalpha(alpha)
+    return solid
+
+
 def _text_width_mixed(draw, text: str, size: int) -> float:
     total = 0.0
-    for ch in text:
-        f = _load_font_for_char(ch, size)
-        total += draw.textlength(ch, font=f)
+    for run, is_emoji in _split_emoji_runs(text):
+        sprite = _emoji_sprite(run, size) if is_emoji else None
+        if sprite is not None:
+            total += sprite.width
+            continue
+        for ch in run:
+            f = _load_font_for_char(ch, size)
+            total += draw.textlength(ch, font=f)
     return total
 
 
-def _draw_text_mixed(draw, xy, text: str, size: int, fill):
+def _draw_text_mixed(draw, xy, text: str, size: int, fill, silhouette: bool = False):
+    """Draw text with per-character font fallback. Emojis are drawn in colour, or as a
+    solid silhouette in `fill` for outline/shadow passes (stamping a colour emoji at
+    dozens of offsets would smear it instead of outlining it)."""
     x, y = xy
-    for ch in text:
-        f = _load_font_for_char(ch, size)
-        draw.text((x, y), ch, font=f, fill=fill)
-        x += draw.textlength(ch, font=f)
+    base = getattr(draw, "_image", None)
+    for run, is_emoji in _split_emoji_runs(text):
+        if is_emoji and base is not None:
+            fill_t = tuple(fill) if isinstance(fill, (tuple, list)) else (255, 255, 255, 255)
+            sprite = _emoji_silhouette(run, size, fill_t) if silhouette else _emoji_sprite(run, size)
+            if sprite is not None:
+                base.paste(sprite, (int(x), int(y + size * 0.08)), sprite)
+                x += sprite.width
+                continue
+        for ch in run:
+            f = _load_font_for_char(ch, size)
+            draw.text((x, y), ch, font=f, fill=fill)
+            x += draw.textlength(ch, font=f)
 
+
+def _emoji_aware_draw(draw, default_size: int):
+    """Make draw.textbbox measure emoji runs at their real (sprite) width, so the
+    pill / karaoke layouts reserve enough room for them."""
+    orig = draw.textbbox
+
+    def textbbox(xy, text, font=None, *args, **kwargs):
+        bb = orig(xy, text, font=font, *args, **kwargs)
+        if isinstance(text, str) and any(e for _, e in _split_emoji_runs(text)):
+            size = int(getattr(font, "size", default_size))
+            bb = (bb[0], bb[1], bb[0] + int(_text_width_mixed(draw, text, size)), bb[3])
+        return bb
+
+    draw.textbbox = textbbox
+    return draw
 
 
 def _build_caption_timeline(segments: list[CaptionSegment], style: str) -> dict:
@@ -322,11 +438,11 @@ def _draw_caption(img, t: float, caption_timeline: dict, style: str, width: int,
     else:
         y_base = int(height * (0.76 if is_vertical else 0.80))
 
-    draw = ImageDraw.Draw(img)
+    draw = _emoji_aware_draw(ImageDraw.Draw(img), font_size)
 
-    def _caption_text(xy, text, font, fill):
+    def _caption_text(xy, text, font, fill, silhouette=False):
         size = int(getattr(font, "size", font_size))
-        _draw_text_mixed(draw, xy, text, size, fill)
+        _draw_text_mixed(draw, xy, text, size, fill, silhouette)
 
     def fit_font(text: str, font, max_w: int):
         """Step the font size down until the text fits max_w (captions must never overflow the frame)."""
@@ -351,7 +467,7 @@ def _draw_caption(img, t: float, caption_timeline: dict, style: str, width: int,
             for dy in range(-stroke_width, stroke_width + 1):
                 if dx == 0 and dy == 0:
                     continue
-                _caption_text((x + dx, y + dy), text, font=font, fill=stroke_color)
+                _caption_text((x + dx, y + dy), text, font=font, fill=stroke_color, silhouette=True)
         _caption_text((x, y), text, font=font, fill=color)
 
     def draw_capcut_inline(words: list, active_idx: int, y: int, bold: bool):
@@ -416,7 +532,7 @@ def _draw_caption(img, t: float, caption_timeline: dict, style: str, width: int,
                 wx = x + PAD_X
                 wy = pill_y + PAD_Y
                 if i != act_idx:
-                    _caption_text((wx + 2, wy + 2), w, font=font, fill=(0, 0, 0, 120))
+                    _caption_text((wx + 2, wy + 2), w, font=font, fill=(0, 0, 0, 120), silhouette=True)
                 _caption_text((wx, wy), w, font=font, fill=txt_color)
                 x += pw + GAP
 
@@ -440,7 +556,7 @@ def _draw_caption(img, t: float, caption_timeline: dict, style: str, width: int,
                 for dy in range(-3, 4):
                     if dx == 0 and dy == 0:
                         continue
-                    _caption_text((x + dx, y + dy), w, font=font, fill=(0, 0, 0, 255))
+                    _caption_text((x + dx, y + dy), w, font=font, fill=(0, 0, 0, 255), silhouette=True)
             _caption_text((x, y), w, font=font, fill=color)
             x += tw + GAP
 
@@ -506,7 +622,7 @@ def _draw_caption(img, t: float, caption_timeline: dict, style: str, width: int,
             for dx in range(-3, 4):
                 for dy in range(-3, 4):
                     if dx or dy:
-                        _caption_text((x + dx, wy + dy), w, font=f, fill=(0, 0, 0, 255))
+                        _caption_text((x + dx, wy + dy), w, font=f, fill=(0, 0, 0, 255), silhouette=True)
             _caption_text((x, wy), w, font=f, fill=color)
             x += tw + GAP
 
@@ -525,7 +641,7 @@ def _draw_caption(img, t: float, caption_timeline: dict, style: str, width: int,
                 for dx in (-r, 0, r):
                     for dy in (-r, 0, r):
                         if dx or dy:
-                            _caption_text((x + dx, y + dy), w, font=font, fill=(*highlight_color[:3], 255))
+                            _caption_text((x + dx, y + dy), w, font=font, fill=(*highlight_color[:3], 255), silhouette=True)
             x += tw + GAP
         from PIL import ImageFilter as _PILFilter
         mask = halo_layer.getchannel("A").filter(_PILFilter.GaussianBlur(5))
@@ -534,7 +650,7 @@ def _draw_caption(img, t: float, caption_timeline: dict, style: str, width: int,
         img.paste(solid, (0, 0), mask=mask)
         x = x0
         for i, (w, (tw, _h)) in enumerate(zip(words, sizes)):
-            _caption_text((x + 1, y + 1), w, font=font, fill=(0, 0, 0, 140))
+            _caption_text((x + 1, y + 1), w, font=font, fill=(0, 0, 0, 140), silhouette=True)
             _caption_text((x, y), w, font=font, fill=highlight_color if i == active_idx else text_color)
             x += tw + GAP
 
@@ -550,7 +666,7 @@ def _draw_caption(img, t: float, caption_timeline: dict, style: str, width: int,
                                        radius=6, fill=(*highlight_color[:3], 235))
                 _caption_text((x, y), w, font=font, fill=marker_txt)
             else:
-                _caption_text((x + 2, y + 2), w, font=font, fill=(0, 0, 0, 170))
+                _caption_text((x + 2, y + 2), w, font=font, fill=(0, 0, 0, 170), silhouette=True)
                 _caption_text((x, y), w, font=font, fill=text_color)
             x += tw + GAP
 
@@ -566,7 +682,7 @@ def _draw_caption(img, t: float, caption_timeline: dict, style: str, width: int,
             for dx in range(-3, 4):
                 for dy in range(-3, 4):
                     if dx or dy:
-                        _caption_text((x + dx, y + dy), w, font=font, fill=(0, 0, 0, 255))
+                        _caption_text((x + dx, y + dy), w, font=font, fill=(0, 0, 0, 255), silhouette=True)
             _caption_text((x, y), w, font=font, fill=color)
             if i == active_idx:
                 draw.rounded_rectangle([x, y + th + 6, x + tw, y + th + 11], radius=2, fill=color)
@@ -588,10 +704,10 @@ def _draw_caption(img, t: float, caption_timeline: dict, style: str, width: int,
         bb = draw.textbbox((0, 0), ctx_text, font=font)
         tw = bb[2] - bb[0]
         x = (width - tw) // 2
-        _caption_text((x + 6, y_base + 6), ctx_text, font=font, fill=highlight_color)
+        _caption_text((x + 6, y_base + 6), ctx_text, font=font, fill=highlight_color, silhouette=True)
         for dx in (-2, 2):
             for dy in (-2, 2):
-                _caption_text((x + dx, y_base + dy), ctx_text, font=font, fill=(0, 0, 0, 220))
+                _caption_text((x + dx, y_base + dy), ctx_text, font=font, fill=(0, 0, 0, 220), silhouette=True)
         _caption_text((x, y_base), ctx_text, font=font, fill=text_color)
 
     elif style == "bounce" and isinstance(entry[0], list):
@@ -644,7 +760,7 @@ def _draw_caption(img, t: float, caption_timeline: dict, style: str, width: int,
         bbox = draw.textbbox((0, 0), ctx_text, font=font)
         tw = bbox[2] - bbox[0]
         x = (width - tw) // 2
-        _caption_text((x + 2, y_base + 2), ctx_text, font=font, fill=(0, 0, 0, 100))
+        _caption_text((x + 2, y_base + 2), ctx_text, font=font, fill=(0, 0, 0, 100), silhouette=True)
         _caption_text((x, y_base), ctx_text, font=font, fill=ctx_color)
 
     else:  # capcut default
@@ -661,7 +777,7 @@ def _draw_caption(img, t: float, caption_timeline: dict, style: str, width: int,
             if bg_color[3] > 0:
                 draw.rounded_rectangle([x - 16, y_base - 8, x + tw + 16, y_base + th + 8],
                                        radius=8, fill=bg_color)
-            _caption_text((x + 3, y_base + 3), ctx_text, font=font, fill=(0, 0, 0, 170))
+            _caption_text((x + 3, y_base + 3), ctx_text, font=font, fill=(0, 0, 0, 170), silhouette=True)
             _caption_text((x, y_base), ctx_text, font=font, fill=ctx_color)
 
     return img
