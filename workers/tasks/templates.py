@@ -1,3 +1,5 @@
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): hook_circle
+# limited to the sports template.
 """
 Template registry for occasion-aware clip rendering.
 Each template drives caption style, hook overlay, voiceover, music, and zoom behavior.
@@ -21,6 +23,7 @@ TEMPLATES: dict[str, dict] = {
         "caption_style":     "capcut-bold",
         "hook_overlay":      True,
         "hook_duration_sec": 3.0,
+        "hook_circle":       True,   # red "look here" circle; sports framing only
         "voiceover":         True,
         "music_track":       "hype",
         "punch_zoom":        True,

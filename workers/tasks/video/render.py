@@ -1,5 +1,6 @@
 # Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): colour emoji in
-# burned-in captions (Noto Color Emoji bitmap sprites, silhouettes for outlines).
+# burned-in captions and hook titles (Noto Color Emoji sprites, silhouettes for
+# outlines); hook red circle only for templates with "hook_circle" (sports).
 """
 Video processing pipeline — ClipForge-based.
 PyAV for video I/O (no ffmpeg needed for clip export/audio).
@@ -793,8 +794,9 @@ def _make_hook_text(title: str, viral_type: str = "") -> str:
     return text[:38]
 
 
-def _draw_hook_overlay(img, t_in_clip: float, hook_text: str, hook_duration_sec: float, width: int, height: int):
-    """Draw a bold text hook at the top and a circle overlay at the action area.
+def _draw_hook_overlay(img, t_in_clip: float, hook_text: str, hook_duration_sec: float, width: int, height: int,
+                       show_circle: bool = False):
+    """Draw a bold text hook at the top and, if show_circle, a circle overlay at the action area.
 
     Active only while t_in_clip < hook_duration_sec. Fades in/out over 0.3s edges.
     """
@@ -813,7 +815,8 @@ def _draw_hook_overlay(img, t_in_clip: float, hook_text: str, hook_duration_sec:
     draw = ImageDraw.Draw(img)
 
     bbox = draw.textbbox((0, 0), hook_text, font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    th = bbox[3] - bbox[1]
+    tw = int(_text_width_mixed(draw, hook_text, font_size))  # emoji-aware width
     x = (width - tw) // 2
     y = int(height * 0.055)
 
@@ -826,10 +829,13 @@ def _draw_hook_overlay(img, t_in_clip: float, hook_text: str, hook_duration_sec:
         for dy in range(-stroke, stroke + 1):
             if dx == 0 and dy == 0:
                 continue
-            draw.text((x + dx, y + dy), hook_text, font=font, fill=(0, 0, 0, alpha))
-    draw.text((x, y), hook_text, font=font, fill=(255, 218, 0, alpha))
+            _draw_text_mixed(draw, (x + dx, y + dy), hook_text, font_size, (0, 0, 0, alpha), silhouette=True)
+    _draw_text_mixed(draw, (x, y), hook_text, font_size, (255, 218, 0, alpha))
 
-    # Red circle at lower-center — where ball/player action typically sits in 9:16 crop
+    if not show_circle:
+        return img
+    # Red circle at lower-center — where ball/player action typically sits in 9:16 crop.
+    # Only meaningful for sports framing, so templates opt in with "hook_circle".
     cx = width // 2
     cy = int(height * 0.60)
     r = int(min(width, height) * 0.075)
@@ -1626,6 +1632,7 @@ def _render_clip_ffmpeg_captions(
     style: str = "capcut",
     hook_text: str = "",
     hook_duration_sec: float = 0.0,
+    hook_circle: bool = False,
     punch_zoom: bool = False,
     background_style: str = "center_crop",
 ) -> None:
@@ -1816,6 +1823,7 @@ def _render_clip_ffmpeg_captions(
                 burn_captions=True,
                 hook_text=hook_text,
                 hook_duration_sec=hook_duration_sec,
+                hook_circle=hook_circle,
             )
         else:
             # No captions or hook — rename/move intermediate directly, no re-encode
@@ -1842,6 +1850,7 @@ def _render_clip(
     burn_captions: bool = True,
     hook_text: str = "",
     hook_duration_sec: float = 0.0,
+    hook_circle: bool = False,
 ) -> None:
     import av
 
@@ -1940,7 +1949,8 @@ def _render_clip(
                                                     target_width, target_height, font_main, font_highlight, cfg)
                             if hook_text and hook_duration_sec > 0:
                                 img = _draw_hook_overlay(img, max(t_in_clip, 0), hook_text,
-                                                         hook_duration_sec, target_width, target_height)
+                                                         hook_duration_sec, target_width, target_height,
+                                                         show_circle=hook_circle)
                             new_frame = av.VideoFrame.from_image(img)
                             del img  # free PIL buffer before encode
                         else:
@@ -2066,9 +2076,11 @@ def _export_clip(
     ai_title = (content.get("title") or clip.title or "")
     hook_text = ""
     hook_duration_sec = 0.0
+    hook_circle = False
     if tmpl.get("hook_overlay"):
         hook_text = _make_hook_text(ai_title, viral_type)
         hook_duration_sec = float(tmpl.get("hook_duration_sec", 3.0))
+        hook_circle = bool(tmpl.get("hook_circle"))
 
     punch_zoom = bool(tmpl.get("punch_zoom"))
     background_style = str(tmpl.get("background_style", "center_crop"))
@@ -2143,6 +2155,7 @@ def _export_clip(
             style=style,
             hook_text=hook_text,
             hook_duration_sec=hook_duration_sec,
+            hook_circle=hook_circle,
             punch_zoom=punch_zoom,
             background_style=background_style,
         )
