@@ -444,6 +444,9 @@ export const videoApi = {
     return new EventSource(`${API_BASES.video}/progress/${jobId}?ticket=${encodeURIComponent(ticket)}`);
   },
   captionStyles: () => videoReq<CaptionStyleInfo[]>("GET", "/caption-styles"),
+  /** Rename a project (video). */
+  update: (videoId: string, body: { title?: string; topic?: string }) =>
+    videoReq<VideoResponse>("PATCH", `/videos/${videoId}`, body),
   upload: (file: File, title: string, config?: ClipConfig) => {
     const fd = new FormData();
     fd.append("file", file);

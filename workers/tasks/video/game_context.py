@@ -23,11 +23,14 @@ from sqlalchemy import text
 from workers.tasks.video._core import _get_session, redis_client
 
 __all__ = ["steam_search", "steam_app", "resolve_game", "game_context_text",
-           "with_game_context", "_resolve_video_game"]
+           "with_game_context", "_resolve_video_game", "_title_from_game"]
 
 log = logging.getLogger(__name__)
 STEAM_BASE = os.getenv("STEAM_STORE_URL", "https://store.steampowered.com").rstrip("/")
 _TIMEOUT = 10
+# videos.metadata as an object, also when an older write stored it as a JSON string.
+_META = ("(CASE jsonb_typeof(metadata) WHEN 'object' THEN metadata "
+         "WHEN 'string' THEN (metadata #>> '{}')::jsonb ELSE '{}'::jsonb END)")
 _SEARCH_TTL = 7 * 86400
 _APP_TTL = 30 * 86400
 
@@ -220,7 +223,7 @@ def _resolve_video_game(tenant_id: str, video_id: str, cfg: dict, title: str = "
         if game:
             with _get_session(tenant_id) as session:
                 session.execute(
-                    text("UPDATE videos SET metadata = COALESCE(metadata, '{}'::jsonb) || "
+                    text(f"UPDATE videos SET metadata = {_META} || "
                          "jsonb_build_object('game', CAST(:g AS jsonb)) WHERE id = CAST(:v AS uuid)"),
                     {"g": json.dumps(game), "v": video_id},
                 )
@@ -228,3 +231,36 @@ def _resolve_video_game(tenant_id: str, video_id: str, cfg: dict, title: str = "
     except Exception as e:
         log.warning("[Game] could not resolve game for video %s: %s", video_id, str(e)[:160])
         return None
+
+
+def _title_from_game(tenant_id: str, video_id: str, game: dict | None) -> str | None:
+    """Name an uploaded project after its game, unless the user has renamed it.
+
+    Uploads are named after their file ("2026-10-20 21-14-33"), so the game is a
+    better name. YouTube imports keep their video title. The file name is kept in
+    metadata.original_title. Returns the new title, or None if nothing changed."""
+    name = ((game or {}).get("name") or "").strip()[:255]
+    if not name:
+        return None
+    try:
+        with _get_session(tenant_id) as session:
+            row = session.execute(
+                text(f"""
+                    UPDATE videos
+                       SET metadata = {_META}
+                                      || jsonb_build_object('original_title', COALESCE({_META}->>'original_title', title)),
+                           title = :name
+                     WHERE id = CAST(:v AS uuid)
+                       AND source_type = 'uploaded'
+                       AND title IS DISTINCT FROM :name
+                       AND COALESCE(({_META}->>'title_edited')::boolean, false) = false
+                    RETURNING title
+                """),
+                {"name": name, "v": video_id},
+            ).fetchone()
+        if row:
+            log.info("[Game] project %s renamed to %r", video_id, name)
+            return name
+    except Exception as e:
+        log.warning("[Game] could not rename project %s: %s", video_id, str(e)[:160])
+    return None

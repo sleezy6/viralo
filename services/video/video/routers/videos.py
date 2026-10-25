@@ -831,7 +831,19 @@ async def update_video(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found.")
 
     if body.title is not None:
-        video.title = body.title
+        title = " ".join(body.title.split())[:255]
+        if not title:
+            raise HTTPException(status_code=422, detail="The project name can't be empty.")
+        if title != video.title:
+            video.title = title
+            # A name the user chose is never replaced by the automatic game name.
+            meta = video.video_metadata or {}
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except ValueError:
+                    meta = {}
+            video.video_metadata = {**(meta if isinstance(meta, dict) else {}), "title_edited": True}
     if body.topic is not None:
         video.topic = body.topic
 

@@ -1,9 +1,11 @@
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): rename projects.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import { navigate, useSearchParams } from "@/lib/router";
 import { videoApi, token as authToken, API_BASES, type VideoResponse } from "@/lib/api";
 import { Pagination } from "../components/Pagination";
+import { EditableTitle } from "../components/EditableTitle";
 import { VirtualizedGrid, VirtualizedList } from "../components/VirtualizedCollection";
 
 const VIDEO_SSE_BASE = API_BASES.video;
@@ -582,7 +584,10 @@ export function ProjectsPage() {
 
                   <div className="mt-5 flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <h2 className="font-display text-[22px] font-bold leading-tight tracking-[-.03em] text-c-text">{selected.title || "Untitled"}</h2>
+                      <h2 className="font-display text-[22px] font-bold leading-tight tracking-[-.03em] text-c-text">
+                        <EditableTitle video={selected}
+                          onRenamed={(v) => setHistory((h) => h.map((x) => x.id === v.id ? { ...x, ...v } : x))} />
+                      </h2>
                       <p className="mt-1.5 text-sm text-c-text-muted">{selected.source_type === "youtube" || selected.source_type === "youtube_url" ? "YouTube import" : "Uploaded video"}</p>
                     </div>
                     <StatusBadge video={selected} />

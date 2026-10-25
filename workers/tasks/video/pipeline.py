@@ -345,6 +345,8 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
     _game = _resolve_video_game(tenant_id, video_id, cfg, title=(yt_meta or {}).get("title", ""))
     if _game:
         _publish_progress(job_id, "metadata", 4, "processing", f"Game: {_game['name']}")
+        from workers.tasks.video.game_context import _title_from_game
+        _title_from_game(tenant_id, video_id, _game)
     topic_focus = with_game_context(topic_focus, _game)
     # min_score is 0-1 in our config; ClipForge uses 0-10 scale
     min_score_01 = float(cfg.get("min_score", 0.5))
@@ -884,6 +886,9 @@ def _gvc_inner(self, tenant_id, video_id, job_id, cfg):
     _stored_game = _vm.get("game") if isinstance(_vm, dict) else None
     if cfg.get("game") or cfg.get("game_appid") or not _stored_game:
         _stored_game = _resolve_video_game(tenant_id, video_id, cfg) or _stored_game
+    if _stored_game:
+        from workers.tasks.video.game_context import _title_from_game
+        _title_from_game(tenant_id, video_id, _stored_game)
     topic_focus = with_game_context(topic_focus, _stored_game)
 
     # ── Step 2: AI viral clip scoring ─────────────────────────────────────────

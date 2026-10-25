@@ -1,5 +1,6 @@
 // Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): working Regenerate all.
 import { useState, useEffect, useRef, useMemo } from "react";
+import { EditableTitle } from "../../components/EditableTitle";
 import { cn, safeFilename, downloadBlob, downloadUrl, stripSrtTimecodes } from "@/lib/utils";
 import { videoApi, type VideoResponse, type ClipApiResponse, type ScheduledPostSummary } from "@/lib/api";
 import { VirtualizedGrid } from "../../components/VirtualizedCollection";
@@ -342,11 +343,14 @@ export function ResultsView({
   onBack,
   onNewUpload,
   onClipsChange,
+  onVideoChange,
 }: {
   video: VideoResponse;
   clips: ClipApiResponse[];
   onBack: () => void;
   onNewUpload?: () => void;
+  /** Receives the updated project after a rename. */
+  onVideoChange?: (video: VideoResponse) => void;
   /** Receives a fresh clip list (after Regenerate, and while regenerating clips finish). */
   onClipsChange?: (clips: ClipApiResponse[]) => void;
 }) {
@@ -435,7 +439,9 @@ export function ResultsView({
           ‹ Projects
         </button>
         <div className={cn("h-7 w-10 flex-none rounded-[6px] bg-gradient-to-br", grad)} />
-        <h2 className="font-display text-[18px] font-bold text-c-text">{video.title ?? "Untitled"}</h2>
+        <h2 className="min-w-0 font-display text-[18px] font-bold text-c-text">
+          {onVideoChange ? <EditableTitle video={video} onRenamed={onVideoChange} /> : (video.title ?? "Untitled")}
+        </h2>
         <span className="rounded-full border border-c-border bg-surface-2 px-2.5 py-0.5 text-[11px] font-semibold text-c-text-muted">
           {clips.length} clips
         </span>

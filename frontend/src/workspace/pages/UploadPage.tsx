@@ -324,6 +324,7 @@ export function UploadPage() {
                 video={activeVideo}
                 clips={clips}
                 onClipsChange={setClips}
+                onVideoChange={setActiveVideo}
                 onBack={() => navigate("/projects")}
                 onNewUpload={() => navigate("/studio")}
               />
