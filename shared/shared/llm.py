@@ -1,6 +1,7 @@
 # Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): added optional
 # self-hosted OpenAI-compatible provider (LOCAL_LLM_*), per-provider timeouts,
-# and <think> block stripping in JSON parsing.
+# <think> block stripping in JSON parsing, and a health check that accepts
+# reasoning models and logs why a provider failed.
 """
 Global free-tier LLM fallback utility.
 
@@ -459,10 +460,19 @@ def _probe(api_key: str, base_url: str, model: str, json_mode: bool, timeout: fl
             log.warning(f"Probe {model}@{base_url} → HTTP {resp.status_code}: {resp.text[:120]}")
             return False
         data = resp.json()
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        return bool((content or "").strip())
+        choice = (data.get("choices") or [{}])[0]
+        msg = choice.get("message") or {}
+        # Reasoning models may spend a 5-token budget thinking: the text can arrive in a
+        # separate reasoning field, or be cut off before any visible content. Either way
+        # the server answered, so it is alive.
+        text = msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning") or ""
+        if (text or "").strip() or choice.get("finish_reason") == "length":
+            return True
+        log.warning(f"Probe {model}@{base_url} → HTTP 200 but empty reply: {resp.text[:160]}")
+        return False
     except Exception as e:
-        log.debug(f"Probe failed {model}@{base_url}: {str(e)[:80]}")
+        # Warning, not debug: "can't reach the server" must be visible in container logs.
+        log.warning(f"Probe {model}@{base_url} failed: {type(e).__name__}: {str(e)[:160]}")
         return False
 
 
