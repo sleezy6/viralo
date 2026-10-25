@@ -41,6 +41,7 @@ services:
       test:
       - CMD-SHELL
       - pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB
+    init: true
   redis:
     networks:
     - viralo-internal
@@ -65,6 +66,7 @@ services:
       - CMD
       - redis-cli
       - ping
+    init: true
   rabbitmq:
     networks:
     - viralo-internal
@@ -93,6 +95,7 @@ services:
       - CMD
       - rabbitmq-diagnostics
       - ping
+    init: true
   frontend:
     image: ghcr.io/sleezy6/viralo-frontend:latest
     networks:
@@ -160,9 +163,11 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+    init: true
   gateway:
     image: ghcr.io/sleezy6/viralo-gateway:latest
     restart: unless-stopped
+    init: true
     networks:
     - viralo-internal
     ports:
@@ -244,6 +249,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+    init: true
   video-service:
     image: ghcr.io/sleezy6/viralo-video:latest
     networks:
@@ -328,6 +334,7 @@ services:
       test:
       - CMD-SHELL
       - python -c "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"
+    init: true
   agent-service:
     image: ghcr.io/sleezy6/viralo-agent:latest
     networks:
@@ -404,6 +411,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+    init: true
   workflow-service:
     image: ghcr.io/sleezy6/viralo-workflow:latest
     networks:
@@ -480,6 +488,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+    init: true
   platform-service:
     image: ghcr.io/sleezy6/viralo-platform:latest
     networks:
@@ -556,6 +565,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+    init: true
   bgutil-pot:
     image: brainicism/bgutil-ytdlp-pot-provider:1.3.1
     restart: unless-stopped
@@ -573,6 +583,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    init: true
   celery-video-pipeline:
     image: ghcr.io/sleezy6/viralo-video:latest
     networks:
@@ -659,6 +670,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    init: true
   celery-video-ai:
     image: ghcr.io/sleezy6/viralo-video:latest
     networks:
@@ -745,6 +757,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    init: true
   celery-video-upload:
     image: ghcr.io/sleezy6/viralo-video:latest
     networks:
@@ -831,6 +844,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    init: true
   celery-video-generate:
     image: ghcr.io/sleezy6/viralo-video:latest
     networks:
@@ -918,6 +932,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    init: true
   celery-agent:
     image: ghcr.io/sleezy6/viralo-agent:latest
     networks:
@@ -1003,6 +1018,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+    init: true
   celery-workflow:
     image: ghcr.io/sleezy6/viralo-workflow:latest
     networks:
@@ -1088,6 +1104,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+    init: true
   celery-post:
     image: ghcr.io/sleezy6/viralo-platform:latest
     networks:
@@ -1173,6 +1190,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+    init: true
   celery-notification:
     image: ghcr.io/sleezy6/viralo-platform:latest
     networks:
@@ -1258,6 +1276,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+    init: true
   celery-beat:
     image: ghcr.io/sleezy6/viralo-core:latest
     networks:
@@ -1344,6 +1363,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+    init: true
 networks:
   viralo-internal:
     driver: bridge
