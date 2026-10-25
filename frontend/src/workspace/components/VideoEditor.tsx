@@ -1,4 +1,4 @@
-// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): editor preview poster, preload and load errors.
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): editor preview size fix, poster, preload and load errors.
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
@@ -523,7 +523,9 @@ export function VideoEditor({
           <div className="flex-1 flex items-center justify-center w-full min-h-0">
             <div
               className="relative overflow-hidden rounded-2xl bg-black shadow-[0_0_0_1px_rgba(255,255,255,.07),0_24px_64px_rgba(0,0,0,.9)]"
-              style={{ maxHeight: "100%", aspectRatio: "9/16", maxWidth: "100%" }}
+              // height is required: with only max-* limits and absolutely positioned
+              // children, the 9:16 box collapsed to 0×0 and the preview showed nothing.
+              style={{ height: "100%", maxHeight: "100%", aspectRatio: "9/16", maxWidth: "100%" }}
             >
               {clip.thumbnail_url && (
                 <img src={clip.thumbnail_url} alt="" className="absolute inset-0 h-full w-full object-cover" />
