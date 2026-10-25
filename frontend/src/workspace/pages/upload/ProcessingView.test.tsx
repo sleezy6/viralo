@@ -99,4 +99,20 @@ describe("ProcessingView mobile layout", () => {
     expect(buttons.every((b) => b.className.includes("w-full"))).toBe(true);
     expect(buttons[2]?.className).toContain("col-span-2");
   });
+
+  it("doesn't repeat a status line when a reconnect replays it", async () => {
+    const es = { onopen: null, onmessage: null as null | ((e: { data: string }) => void), onerror: null, close: vi.fn() };
+    progressStream.mockResolvedValue(es);
+    await act(async () => {
+      root.render(<ProcessingView video={processingVideo} onDone={() => {}} onCancel={() => {}} onNewUpload={() => {}} />);
+    });
+    const msg = JSON.stringify({ step: "render", pct: 65, status: "processing", message: "Clip 3/3: rendering (hook, captions)" });
+    await act(async () => { es.onmessage?.({ data: msg }); });
+    await act(async () => { es.onmessage?.({ data: msg }); });   // replayed after a reconnect
+    await act(async () => { es.onmessage?.({ data: msg }); });
+    const count = (container.textContent ?? "").split("Clip 3/3: rendering").length - 1;
+    expect(count).toBe(1);
+    await act(async () => { es.onmessage?.({ data: JSON.stringify({ step: "render", pct: 80, status: "processing", message: "Clip 3/3: mixing" }) }); });
+    expect(container.textContent).toContain("Clip 3/3: mixing");
+  });
 });

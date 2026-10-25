@@ -1,3 +1,4 @@
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): no duplicate status lines after a reconnect.
 import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { navigate } from "@/lib/router";
@@ -164,6 +165,13 @@ export function ProcessingView({
   const pushEvent = (ev: Omit<LiveEvent, "id" | "ts">) =>
     setLiveEvents((prev) => {
       const sanitizedEv = { ...ev, label: sanitize(ev.label), sub: ev.sub ? sanitize(ev.sub) : undefined };
+      // A reconnect replays the latest status; don't list the same step twice in a row
+      // (keeping the first entry also keeps its time, i.e. how long the step has run).
+      const last = prev[0];
+      if (last && last.kind === sanitizedEv.kind && last.label === sanitizedEv.label
+          && (last.sub ?? "") === (sanitizedEv.sub ?? "") && (last.pct ?? null) === (sanitizedEv.pct ?? null)) {
+        return prev;
+      }
       const next = [{ ...sanitizedEv, id: Math.random().toString(36).slice(2), ts: Date.now() }, ...prev].slice(0, 30);
       try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch { /* quota */ }
       return next;
