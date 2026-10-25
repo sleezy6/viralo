@@ -4,7 +4,9 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",
-    "sqlalchemy[asyncio]>=2.0",
+    # <2.1: SQLAlchemy 2.1 maps plain postgresql:// to psycopg (v3), but the
+    # sync task engines rely on psycopg2 (matches uv.lock's 2.0.x).
+    "sqlalchemy[asyncio]>=2.0,<2.1",
     "asyncpg>=0.30.0",
     "alembic>=1.14.0",
     "pydantic[email]>=2.10",
