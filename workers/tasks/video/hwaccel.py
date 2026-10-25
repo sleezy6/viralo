@@ -20,11 +20,12 @@ import os
 import subprocess
 import threading
 
-__all__ = ["pyav_encoder", "ffmpeg_encoder_args", "disable", "status", "is_gpu_error"]
+__all__ = ["pyav_encoder", "ffmpeg_encoder_args", "disable", "status", "force_cpu", "gpu_in_use"]
 
 log = logging.getLogger(__name__)
 _lock = threading.Lock()
 _state: dict = {}  # "pyav": bool, "ffmpeg": bool, "reason": str
+_local = threading.local()  # .force_cpu: encode this render on the CPU without disabling the GPU
 
 
 def _mode() -> str:
@@ -109,16 +110,23 @@ def _check() -> dict:
         return _state
 
 
-_GPU_ERROR_HINTS = ("qsv", "mfx", "vpl", "vaapi", "libva", "/dev/dri", "hwaccel",
-                    "hardware", "device creation failed", "hw_frames", "hwupload")
+class force_cpu:
+    """`with force_cpu():` — encoders chosen inside use the CPU, for this thread only.
+    Used to retry one failed render on the CPU before deciding the GPU is at fault
+    (GPU encoder errors often don't name the GPU, and a hung encode is just a timeout)."""
+    def __enter__(self):
+        self._prev = getattr(_local, "force_cpu", False)
+        _local.force_cpu = True
+        return self
 
-
-def is_gpu_error(exc: BaseException) -> bool:
-    """Does this failure come from the GPU encoder (vs. the source, a timeout, …)?"""
-    if type(exc).__name__ in ("SoftTimeLimitExceeded", "TimeLimitExceeded", "TimeoutExpired"):
+    def __exit__(self, *exc):
+        _local.force_cpu = self._prev
         return False
-    msg = str(exc).lower()
-    return any(h in msg for h in _GPU_ERROR_HINTS)
+
+
+def gpu_in_use() -> bool:
+    st = _check()
+    return (st["pyav"] or st["ffmpeg"]) and not getattr(_local, "force_cpu", False)
 
 
 def disable(reason: str) -> None:
@@ -130,14 +138,14 @@ def disable(reason: str) -> None:
 
 def pyav_encoder(crf: int | str, preset: str = "veryfast") -> tuple[str, str, dict]:
     """(codec, pix_fmt, options) for a PyAV H.264 output stream."""
-    if _check()["pyav"]:
+    if _check()["pyav"] and not getattr(_local, "force_cpu", False):
         return "h264_qsv", "nv12", {"global_quality": _quality(crf), "preset": "veryfast", "profile": "high"}
     return "h264", "yuv420p", {"crf": str(crf), "preset": preset}
 
 
 def ffmpeg_encoder_args(crf: int | str, preset: str = "veryfast") -> list[str]:
     """ffmpeg CLI video encoder arguments (codec, quality, pixel format)."""
-    if _check()["ffmpeg"]:
+    if _check()["ffmpeg"] and not getattr(_local, "force_cpu", False):
         return ["-c:v", "h264_qsv", "-global_quality", _quality(crf), "-preset", "veryfast", "-pix_fmt", "nv12"]
     return ["-c:v", "libx264", "-crf", str(crf), "-preset", preset, "-pix_fmt", "yuv420p"]
 

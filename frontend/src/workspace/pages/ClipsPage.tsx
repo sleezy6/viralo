@@ -704,15 +704,32 @@ export function ClipsPage() {
   // Follow regenerating/uploading clips until they settle. The live stream only reports
   // upload results; a regenerate that fails (or finishes before the stream connects)
   // is only visible by asking for the clip again.
+  // Each busy clip is followed for up to 30 minutes, and dropped if it can't be loaded
+  // (deleted); the page's normal refresh picks up anything slower than that.
+  const pollSince = useRef<Map<string, number>>(new Map());
+  const pollGone = useRef<Set<string>>(new Set());
   const busyIds = useMemo(() => clips.filter((c) => CLIP_BUSY_STATUSES.includes(c.status)).map((c) => c.id).join(","), [clips]);
   useEffect(() => {
     if (!busyIds) return;
-    const ids = busyIds.split(",");
+    const now = Date.now();
+    for (const id of busyIds.split(",")) if (!pollSince.current.has(id)) pollSince.current.set(id, now);
     const t = window.setInterval(() => {
-      void Promise.all(ids.map((id) => videoApi.getClip(id).catch(() => null))).then((fresh) => {
-        const byId = new Map(fresh.filter((c): c is ClipApiResponse => !!c).map((c) => [c.id, c]));
-        if (byId.size) setClips((prev) => prev.map((c) => byId.get(c.id) ?? c));
-      });
+      const ids = busyIds.split(",").filter((id) =>
+        !pollGone.current.has(id) && Date.now() - (pollSince.current.get(id) ?? 0) < 30 * 60_000);
+      if (!ids.length) return;
+      void Promise.all(ids.map((id) => videoApi.getClip(id).catch(() => { pollGone.current.add(id); return null; })))
+        .then((fresh) => {
+          const byId = new Map(fresh.filter((c): c is ClipApiResponse => !!c).map((c) => [c.id, c]));
+          if (!byId.size) return;
+          // GET /clips/{id} doesn't include the clip's posts; keep the list's copy so
+          // "Live"/"Queued" badges and post history don't vanish while it's busy.
+          setClips((prev) => prev.map((c) => {
+            const f = byId.get(c.id);
+            if (!f) return c;
+            if (!CLIP_BUSY_STATUSES.includes(f.status)) pollSince.current.delete(c.id);
+            return { ...c, ...f, scheduled_posts: c.scheduled_posts };
+          }));
+        });
     }, 5000);
     return () => window.clearInterval(t);
   }, [busyIds]);

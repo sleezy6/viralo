@@ -239,16 +239,20 @@ def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
         for cid in clip_ids:
             try:
                 with _get_session(tenant_id) as session:
+                    # Claim this clip for now: only one still "regenerating" (not reset by
+                    # the reconciler meanwhile, not deleted), and stamp it so the
+                    # reconciler measures from when work actually started on it.
                     row = session.execute(
                         text("""
-                            SELECT title, start_sec, end_sec, platform, score, metadata
-                              FROM clips
+                            UPDATE clips SET updated_at = NOW()
                              WHERE id = CAST(:cid AS uuid) AND video_id = CAST(:vid AS uuid)
+                               AND status = 'regenerating'
+                            RETURNING title, start_sec, end_sec, platform, score, metadata
                         """),
                         {"cid": cid, "vid": video_id},
                     ).fetchone()
                 if not row:
-                    results[cid] = "not found"
+                    results[cid] = "skipped (no longer waiting to regenerate)"
                     continue
                 cmeta = row.metadata or {}
                 signals = cmeta.get("signals") or {}

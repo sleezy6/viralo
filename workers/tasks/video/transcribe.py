@@ -138,11 +138,12 @@ def _strip_asr_tags(text: str) -> str:
 
 
 # Diarizing models (e.g. MOSS-Transcribe-Diarize) write "[start][S01]text[end]" pieces.
-# The closing [end] must be followed by the next piece or the end of the text, so a
-# number in brackets inside the speech ("[2] to [1]") doesn't end the piece early.
-_DIAR_PIECE_RE = re.compile(
-    r"\[(\d+(?:\.\d+)?)\]\s*\[(S\d+)\]\s*(.*?)\s*\[(\d+(?:\.\d+)?)\]"
-    r"(?=\s*\[\d+(?:\.\d+)?\]\s*\[S\d+\]|\s*$)", re.S)
+# Each piece starts with "[start][S01]"; its text runs to the next piece's start, and
+# its end time is the last "[number]" before that. Splitting on the start markers keeps
+# trailing tokens, tags between pieces and numbers inside the speech from moving text
+# into the wrong speaker's piece or dropping it.
+_DIAR_START_RE = re.compile(r"\[(\d+(?:\.\d+)?)\]\s*\[(S\d+)\]")
+_DIAR_TIME_RE = re.compile(r"\[(\d+(?:\.\d+)?)\]")
 _SPEAKER_TAG_RE = re.compile(r"\[(S\d+)\]")
 
 
@@ -156,11 +157,21 @@ def _norm_speaker(label) -> str | None:
 
 def _diarized_pieces(text_: str) -> list[tuple[float, float, str, str]]:
     """(start, end, speaker, text) for each timed speaker piece in raw model text."""
+    text_ = text_ or ""
+    starts = list(_DIAR_START_RE.finditer(text_))
     out = []
-    for m in _DIAR_PIECE_RE.finditer(text_ or ""):
-        body = _strip_asr_tags(m.group(3))
-        if body:
-            out.append((float(m.group(1)), float(m.group(4)), _norm_speaker(m.group(2)), body))
+    for i, m in enumerate(starts):
+        body = text_[m.end(): starts[i + 1].start() if i + 1 < len(starts) else len(text_)]
+        start = float(m.group(1))
+        times = list(_DIAR_TIME_RE.finditer(body))
+        if times:  # the last [number] closes the piece; anything after it isn't speech
+            end = float(times[-1].group(1))
+            body = body[: times[-1].start()]
+        else:
+            end = float(starts[i + 1].group(1)) if i + 1 < len(starts) else start
+        words = _strip_asr_tags(body)
+        if words:
+            out.append((start, max(end, start), _norm_speaker(m.group(2)), words))
     return out
 
 
@@ -422,12 +433,18 @@ def _transcribe(source_path: str, duration: float, language: str = "auto",
         client, label = b["client"], b["label"]
         try:
             all_words: list[WordTimestamp] = []
+            chunk_of: dict[int, int] = {}  # id(word) -> audio chunk it came from
+
+            def _add_chunk(idx: int, ws: list[WordTimestamp]) -> None:
+                for w_ in ws:
+                    chunk_of[id(w_)] = idx
+                all_words.extend(ws)
             detected_lang = ""
             translating = False
             for i, (audio_bytes, offset) in enumerate(audio_chunks):
                 fname = f"audio_chunk_{i}.mp3"
                 if translating:
-                    all_words.extend(_translate_chunk(client, audio_bytes, fname, offset, b["translate_model"]))
+                    _add_chunk(i, _translate_chunk(client, audio_bytes, fname, offset, b["translate_model"]))
                     continue
                 next_off = audio_chunks[i + 1][1] if i + 1 < len(audio_chunks) else duration
                 req_lang = language if language != "auto" else (b.get("default_language") or "auto")
@@ -442,7 +459,7 @@ def _transcribe(source_path: str, duration: float, language: str = "auto",
                 if (i == 0 and translate_to_english
                         and detected_lang and detected_lang.lower() not in _ENGLISH_LANGS):
                     try:
-                        all_words.extend(_translate_chunk(client, audio_bytes, fname, offset, b["translate_model"]))
+                        _add_chunk(i, _translate_chunk(client, audio_bytes, fname, offset, b["translate_model"]))
                         translating = True
                         logging.info(f"[Whisper] '{detected_lang}' speech — translating captions to English")
                         continue
@@ -450,18 +467,19 @@ def _transcribe(source_path: str, duration: float, language: str = "auto",
                         raise  # out of time: let the task fail cleanly instead of trying more
                     except Exception as e:
                         logging.warning(f"[Whisper] translate failed, keeping source language: {str(e)[:120]}")
-                all_words.extend(words)
+                _add_chunk(i, words)
 
             # Deduplicate overlapping chunk boundaries
             if len(audio_chunks) > 1:
                 # A word heard by both overlapping chunks appears twice with (almost) the
-                # same start. Keying on the start alone also dropped short words that
-                # simply fell in the same 0.1 s bucket as their neighbour.
+                # same start; drop the second copy. Only words from *different* chunks
+                # are compared, so real repeats ("no no no") and short words survive.
+                def _key(word: str) -> str:
+                    return re.sub(r"\W+", "", word.lower()) or word
                 deduped: list[WordTimestamp] = []
                 for w in sorted(all_words, key=lambda x: x.start):
-                    wk = re.sub(r"\W+", "", w.word.lower())
-                    if any(abs(p.start - w.start) < 0.3 and re.sub(r"\W+", "", p.word.lower()) == wk
-                           for p in deduped[-8:]):
+                    if any(chunk_of.get(id(p)) != chunk_of.get(id(w)) and abs(p.start - w.start) < 0.3
+                           and _key(p.word) == _key(w.word) for p in deduped[-8:]):
                         continue
                     deduped.append(w)
                 all_words = deduped

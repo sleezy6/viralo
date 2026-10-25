@@ -558,6 +558,7 @@ async def upload_video(
     )
     db.add(video)
     await db.commit()
+    await _set_tenant(db, tenant_id)  # the commit cleared the row-level-security tenant
 
     # Track storage usage (non-fatal if this fails)
     try:
@@ -572,6 +573,7 @@ async def upload_video(
     )
     await db.execute(update(Video).where(Video.id == video_id).values(celery_task_id=task.id))
     await db.commit()
+    await _set_tenant(db, tenant_id)
     await db.refresh(video)
 
     return VideoResponse.model_validate(video)
@@ -901,6 +903,7 @@ async def update_video(
         video.topic = body.topic
 
     await db.commit()
+    await _set_tenant(db, token.tenant_id)
     await db.refresh(video)
     return VideoResponse.model_validate(video)
 
@@ -954,6 +957,7 @@ async def update_video_speakers(
         {"sp": json.dumps({"colors": colors, "list": lst}), "v": str(video.id)},
     )
     await db.commit()
+    await _set_tenant(db, token.tenant_id)
     await db.refresh(video)
     return VideoResponse.model_validate(video)
 
@@ -1798,6 +1802,12 @@ def _queue_regenerate(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
     _get_celery().send_task("workers.tasks.video.regenerate_clips", args=args)
 
 
+async def _set_tenant(db: AsyncSession, tenant_id) -> None:
+    """Re-apply the row-level-security tenant after a commit: get_tenant_db sets it
+    transaction-local, so queries after a commit would otherwise run without it."""
+    await db.execute(text("SELECT set_config('app.current_tenant', :tid, true)"), {"tid": str(tenant_id)})
+
+
 async def _claim_and_queue(db: AsyncSession, tenant_id: str, video_id: str, clips: list[Clip],
                            mode: str, timing: dict | None = None) -> list[str]:
     """Mark clips "regenerating" and queue the job.
@@ -1819,6 +1829,7 @@ async def _claim_and_queue(db: AsyncSession, tenant_id: str, video_id: str, clip
     )
     claimed = [str(r[0]) for r in res.fetchall()]
     await db.commit()
+    await _set_tenant(db, tenant_id)
     if not claimed:
         return []
     claimed = [cid for cid in before if cid in set(claimed)]  # keep the caller's order
@@ -1830,6 +1841,7 @@ async def _claim_and_queue(db: AsyncSession, tenant_id: str, video_id: str, clip
             await db.execute(text("UPDATE clips SET status = :st WHERE id = CAST(:id AS uuid) AND status = 'regenerating'"),
                              {"st": before[cid], "id": cid})
         await db.commit()
+        await _set_tenant(db, tenant_id)
         raise HTTPException(status_code=503,
                             detail="Couldn't start the job (the task queue isn't reachable). Try again in a moment.")
     return claimed

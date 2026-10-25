@@ -1742,21 +1742,25 @@ def _ffmpeg_error_excerpt(err: str, limit: int = 1200) -> str:
 def _render_clip_ffmpeg_captions(*args, **kwargs) -> None:
     """Render a clip; if the GPU encoder fails, turn it off and redo the clip on the CPU."""
     from workers.tasks.video import hwaccel
+    if not hwaccel.gpu_in_use():
+        return _render_clip_ffmpeg_captions_impl(*args, **kwargs)
     try:
         return _render_clip_ffmpeg_captions_impl(*args, **kwargs)
     except Exception as e:
-        st = hwaccel.status()
-        # Only a GPU encoder failure switches to the CPU. Anything else (bad source,
-        # timeout, out of time) would fail the same way on the CPU, and turning the GPU
-        # off for the rest of this worker's life over it would just slow every clip.
-        if not (st["pyav"] or st["ffmpeg"]) or not hwaccel.is_gpu_error(e):
-            raise
+        if type(e).__name__ in ("SoftTimeLimitExceeded", "TimeLimitExceeded"):
+            raise  # the task is out of time; a retry can't finish either
+        # GPU encoder errors often don't name the GPU, and a hung encode is only a
+        # timeout, so retry this clip on the CPU. Only if that works was the GPU at
+        # fault — then stop using it in this worker. If the CPU fails too, the problem
+        # is the clip/source and the GPU stays on.
+        logging.warning("[HW] render failed with Quick Sync (%s) — retrying this clip on the CPU", str(e)[:160])
+        with hwaccel.force_cpu():
+            try:
+                result = _render_clip_ffmpeg_captions_impl(*args, **kwargs)
+            except Exception:
+                raise e
         hwaccel.disable(str(e))
-        logging.warning("[HW] redoing this clip on the CPU")
-        try:
-            return _render_clip_ffmpeg_captions_impl(*args, **kwargs)
-        except Exception as cpu_err:
-            raise RuntimeError(f"render failed on the GPU and again on the CPU: {cpu_err}") from e
+        return result
 
 
 def _render_clip_ffmpeg_captions_impl(
