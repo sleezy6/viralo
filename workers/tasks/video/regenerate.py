@@ -102,6 +102,8 @@ def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
     content_type = vmeta.get("content_type", "other") or "other"
     occasion = cfg.get("occasion") or vmeta.get("occasion", "") or ""
     viral_type = vmeta.get("viral_type", "") or ""
+    from workers.tasks.video.game_context import with_game_context
+    topic_focus = with_game_context(cfg.get("topic_focus", ""), vmeta.get("game"))
 
     work_dir = Path(VIDEO_TEMP_DIR) / video_id / "regen"
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -143,7 +145,7 @@ def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
                 if mode in ("text", "both"):
                     new = _batch_ai_content(
                         [clip], words, {0: captions}, platforms,
-                        content_type=content_type, topic_focus=cfg.get("topic_focus", ""),
+                        content_type=content_type, topic_focus=topic_focus,
                         language=language,
                     ).get(0) or {}
                     if new.get("title"):

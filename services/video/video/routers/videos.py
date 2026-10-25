@@ -1612,6 +1612,44 @@ async def retry_clip_upload(
     return clip
 
 
+# ── Steam game search for the upload form (sleezy6 fork, Apache-2.0) ──────────
+# The browser can't call Steam directly (no CORS), so suggestions go through here.
+_STEAM_BASE = os.getenv("STEAM_STORE_URL", "https://store.steampowered.com").rstrip("/")
+
+
+@router.get("/games/search")
+async def search_games(
+    q: str = Query(..., min_length=2, max_length=80),
+    token: TokenPayload = Depends(get_current_user),
+    redis: aioredis.Redis = Depends(get_redis),
+):
+    """Steam games matching `q`: [{appid, name, image}], at most 8. Cached for a week."""
+    term = " ".join(q.split())
+    key = "steam:suggest:" + re.sub(r"[^a-z0-9]+", "", term.lower())
+    try:
+        cached = await redis.get(key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        pass
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            r = await client.get(f"{_STEAM_BASE}/api/storesearch/", params={"term": term, "l": "english", "cc": "US"})
+            r.raise_for_status()
+            items = [
+                {"appid": int(it["id"]), "name": it.get("name", ""), "image": it.get("tiny_image", "")}
+                for it in (r.json().get("items") or [])
+                if it.get("type", "app") == "app" and it.get("id")
+            ][:8]
+    except Exception:
+        return []  # suggestions are a convenience; typing a name still works
+    try:
+        await redis.setex(key, 7 * 86400, json.dumps(items))
+    except Exception:
+        pass
+    return items
+
+
 # ── Regenerate (sleezy6 fork, Apache-2.0) ─────────────────────────────────────
 # mode: "text"   = ask the AI for a new title, captions and hashtags
 #       "render" = re-render the video with the current caption/hook code

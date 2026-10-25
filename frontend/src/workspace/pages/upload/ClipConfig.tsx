@@ -1,8 +1,10 @@
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): Game field.
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { videoApi, type ClipConfig } from "@/lib/api";
 import { ASPECT_OPTIONS, ASPECT_DETAILS, LENGTH_PRESETS, CAPTION_STYLES, LANGUAGE_OPTIONS, type CaptionStyleOption } from "./constants";
 import { formatClipTime } from "./helpers";
+import { GameField } from "./GameField";
 
 /* 9:16 phone-frame mock of how each caption style renders on video — the
    caption sits where the real burn-in places it (TikTok-style lower-center,
@@ -409,6 +411,13 @@ export function ClipConfigPanel({ config, onChange, step }: { config: ClipConfig
               onChange={(e) => set({ topic_focus: e.target.value || null })}
               className={inputCls} />
             <p className="mt-2 text-[11.5px] text-c-text-muted">Use this to bias clip selection without changing the source video.</p>
+            <GameField
+              game={config.game}
+              appid={config.game_appid}
+              onChange={(patch) => set(patch)}
+              inputCls={inputCls}
+              labelCls={labelCls}
+            />
           </div>
 
           <ClipCaptionToggles

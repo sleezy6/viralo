@@ -219,7 +219,21 @@ export interface VideoResponse {
   metadata: Record<string, unknown> | null;
   created_at: string;
   source_url?: string | null;
+  /** Game the AI was given as background, if any. */
+  game?: VideoGame | null;
 }
+
+export interface VideoGame {
+  name: string;
+  appid?: number;
+  url?: string;
+  image?: string;
+  genres?: string[];
+  /** "you" = chosen on upload, "title" = detected from the video title. */
+  source?: "you" | "title";
+}
+
+export interface SteamGameSuggestion { appid: number; name: string; image: string }
 
 export interface PaginatedResponse<T> {
   items: T[];
@@ -356,6 +370,9 @@ export interface ClipConfig {
   max_clips?: number;
   min_score?: number;
   topic_focus?: string | null;
+  /** Game shown in the video; looked up on Steam for AI background (sleezy6 fork). */
+  game?: string | null;
+  game_appid?: number | null;
   add_captions?: boolean;
   skip_caption?: boolean;
   language?: string | null;
@@ -493,6 +510,8 @@ export const videoApi = {
   retryClipUpload: (clipId: string) =>
     videoReq<ClipApiResponse>("POST", `/clips/${clipId}/retry-upload`),
   /** "text" = new AI title/caption/tags, "render" = re-render, "both" = new text then re-render. */
+  searchGames: (q: string) =>
+    videoReq<SteamGameSuggestion[]>("GET", `/games/search?q=${encodeURIComponent(q)}`),
   regenerateClip: (clipId: string, mode: RegenerateMode) =>
     videoReq<ClipApiResponse>("POST", `/clips/${clipId}/regenerate`, { mode }),
   regenerateVideoClips: (videoId: string, mode: RegenerateMode) =>

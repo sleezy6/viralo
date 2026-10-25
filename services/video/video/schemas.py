@@ -1,4 +1,7 @@
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): game fields.
 from __future__ import annotations
+
+import json
 
 import uuid
 from datetime import datetime
@@ -105,6 +108,9 @@ class ClipConfig(BaseModel):
     )
 
     topic_focus: str | None = Field(default=None, description="Guide AI to focus on specific topic")
+    # Game context (sleezy6 fork): looked up on Steam and given to the AI as background.
+    game: str | None = Field(default=None, max_length=120, description="Game shown in the video (name)")
+    game_appid: int | None = Field(default=None, ge=1, description="Steam app id picked from suggestions")
 
     # Template / occasion-aware rendering
     template_id: Literal["sports-hype", "gaming-clutch", "cinematic", "music-vibe", "talking-head", "generic"] | None = Field(default=None, description="Template ID override (None = auto-detect from occasion)")
@@ -194,9 +200,25 @@ class VideoResponse(BaseModel):
     celery_task_id: str | None = None
     error_message: str | None = None
     created_at: Any
+    # Game the AI was given as background (from videos.metadata->'game'), if any.
+    game: dict | None = Field(default=None, validation_alias="video_metadata")
     model_config = {"from_attributes": True}
 
     _sign_media = field_validator("storage_url", "thumbnail_url", mode="before")(sign_media_url)
+
+    @field_validator("game", mode="before")
+    @classmethod
+    def _game_from_metadata(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                return None
+        g = value.get("game") if isinstance(value, dict) else None
+        if not isinstance(g, dict) or not g.get("name"):
+            return None
+        keep = ("name", "appid", "url", "image", "genres", "source")
+        return {k: g[k] for k in keep if k in g}
 
     @field_validator("clip_config", mode="before")
     @classmethod

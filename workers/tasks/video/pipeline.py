@@ -1,3 +1,4 @@
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): Steam game context.
 """
 Video processing pipeline — ClipForge-based.
 PyAV for video I/O (no ffmpeg needed for clip export/audio).
@@ -338,6 +339,13 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
     max_dur = cfg.get("duration_max", 60)
     platforms = cfg.get("platforms", ["tiktok", "reels", "shorts"])
     topic_focus = cfg.get("topic_focus", "")
+    # Game context (Steam): background for every AI step below, via the topic line.
+    from workers.tasks.video.game_context import _resolve_video_game, with_game_context
+    _publish_progress(job_id, "metadata", 3, "processing", "Looking up the game…")
+    _game = _resolve_video_game(tenant_id, video_id, cfg, title=(yt_meta or {}).get("title", ""))
+    if _game:
+        _publish_progress(job_id, "metadata", 4, "processing", f"Game: {_game['name']}")
+    topic_focus = with_game_context(topic_focus, _game)
     # min_score is 0-1 in our config; ClipForge uses 0-10 scale
     min_score_01 = float(cfg.get("min_score", 0.5))
     min_score_10 = min_score_01 * 10  # e.g. 0.5 → 5.0; default keeps 7.5 floor in AI prompt
@@ -464,6 +472,8 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
             _publish_progress(job_id, "transcribe", 37, "processing", "Generating video metadata from transcript...")
             vid_meta = _ai_generate_video_metadata(words, meta.duration, topic_focus) or {}
             if vid_meta:
+                if _game:
+                    vid_meta["game"] = _game  # metadata is replaced wholesale here
                 _update_video(tenant_id, video_id, metadata=json.dumps(vid_meta))
                 _save_step_artifact(tenant_id, video_id, "video_metadata", vid_meta)
                 # Auto-detect language from metadata when user didn't set one explicitly
@@ -864,6 +874,17 @@ def _gvc_inner(self, tenant_id, video_id, job_id, cfg):
             duration = float(vid_row.duration_sec)
         if not topic_focus and vid_row.topic:
             topic_focus = vid_row.topic
+    from workers.tasks.video.game_context import _resolve_video_game, with_game_context
+    _vm = (vid_row.metadata if vid_row else None) or {}
+    if isinstance(_vm, str):
+        try:
+            _vm = json.loads(_vm)
+        except Exception:
+            _vm = {}
+    _stored_game = _vm.get("game") if isinstance(_vm, dict) else None
+    if cfg.get("game") or cfg.get("game_appid") or not _stored_game:
+        _stored_game = _resolve_video_game(tenant_id, video_id, cfg) or _stored_game
+    topic_focus = with_game_context(topic_focus, _stored_game)
 
     # ── Step 2: AI viral clip scoring ─────────────────────────────────────────
     _update_video(tenant_id, video_id, pipeline_step="scoring", pipeline_pct=35)

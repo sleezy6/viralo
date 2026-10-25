@@ -439,6 +439,14 @@ export function ResultsView({
         <span className="rounded-full border border-c-border bg-surface-2 px-2.5 py-0.5 text-[11px] font-semibold text-c-text-muted">
           {clips.length} clips
         </span>
+        {video.game?.name && (() => {
+          const g = video.game;
+          const label = <>🎮 {g.name}{g.source === "title" && <span className="font-normal text-c-text-muted"> · detected from title</span>}</>;
+          const cls = "inline-flex max-w-[260px] items-center truncate rounded-full border border-c-border bg-surface-2 px-2.5 py-0.5 text-[11px] font-semibold text-c-text-secondary";
+          return g.url
+            ? <a href={g.url} target="_blank" rel="noopener noreferrer" title="Steam info given to the AI as background" className={cn(cls, "hover:text-c-text")}>{label}</a>
+            : <span title="Given to the AI as background" className={cls}>{label}</span>;
+        })()}
         {(video.status === "done" || video.status === "ready")
           ? <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300/20 bg-emerald-400/10 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-300"><span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />Ready</span>
           : <><span className="inline-flex items-center gap-1 rounded-full border border-red-400/20 bg-red-400/10 px-2.5 py-0.5 text-[11px] font-semibold text-red-400"><span className="h-1.5 w-1.5 rounded-full bg-red-400" />Failed</span>
