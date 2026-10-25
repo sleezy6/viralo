@@ -1,3 +1,4 @@
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): Regenerate asks for a different title and reports AI failures.
 """
 Video processing pipeline — ClipForge-based.
 PyAV for video I/O (no ffmpeg needed for clip export/audio).
@@ -804,8 +805,13 @@ def _multi_agent_clip_content(
     content_type: str,
     topic_focus: str | None = None,
     language: str = "en",
+    avoid_titles: list[str] | None = None,
 ) -> dict:
     """Generate viral description, trending hashtags and an optimized title.
+
+    avoid_titles: titles the clip already had (Regenerate) — the AI is asked for a
+    clearly different one. The result's "ai_ok" is False when the AI gave no usable
+    answer (the title then falls back to the clip's existing one).
 
     Single combined LLM call (was 3 parallel calls). With clips also processed in
     parallel upstream, 3 calls/clip produced a burst of ~12 concurrent requests that
@@ -813,7 +819,14 @@ def _multi_agent_clip_content(
     and keeps work on the fast primary provider.
     """
     topic_ctx = f"Topic: {topic_focus}\n" if topic_focus else ""
-    clip_ctx = f"Clip reason: {clip.reason}\nClip title hint: {clip.title}"
+    old_titles = [t.strip() for t in (avoid_titles or []) if t and t.strip()]
+    if old_titles:
+        listed = "; ".join(f'"{t}"' for t in dict.fromkeys(old_titles))
+        clip_ctx = (f"Clip reason: {clip.reason}\n"
+                    f"This clip already has the title {listed}. Write NEW titles that are clearly "
+                    f"different from it — different wording and a different angle or hook.")
+    else:
+        clip_ctx = f"Clip reason: {clip.reason}\nClip title hint: {clip.title}"
     prompt_lang = _language_for_prompt(language)
     lang_instruction = (
         f"IMPORTANT: Generate ALL content (title, descriptions, CTAs) in the same language as the transcript. The detected language is: {prompt_lang}.\n"
@@ -927,6 +940,7 @@ Return JSON:
         "title": best_title,
         "platforms": merged_platforms,
         "all_hashtags": all_hashtags,  # includes # prefix, all lowercase
+        "ai_ok": bool(title_result.get("best_title")),
     }
 
 
@@ -1055,8 +1069,10 @@ def _batch_ai_content(
     content_type: str = "other",
     topic_focus: str | None = None,
     language: str = "en",
+    avoid_titles: dict[int, list[str]] | None = None,
 ) -> dict[int, dict]:
-    """Generate AI title/description/tags for all clips in parallel. Returns {clip_index: content}."""
+    """Generate AI title/description/tags for all clips in parallel. Returns {clip_index: content}.
+    avoid_titles: {clip_index: titles to steer away from} (Regenerate)."""
     def _gen_one(idx_clip: tuple[int, ClipResult]) -> tuple[int, dict]:
         idx, clip = idx_clip
         captions = all_captions.get(idx, [])
@@ -1071,6 +1087,7 @@ def _batch_ai_content(
                 content_type=content_type,
                 topic_focus=topic_focus,
                 language=language,
+                avoid_titles=(avoid_titles or {}).get(idx),
             )
         except Exception as e:
             logging.warning("_multi_agent_clip_content failed for clip %s: %s — falling back", clip.start, e)

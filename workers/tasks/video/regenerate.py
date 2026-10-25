@@ -266,11 +266,18 @@ def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
                 }
 
                 if mode in ("text", "both"):
+                    old_titles = [t for t in (row.title, cmeta.get("ai_title")) if t]
                     new = _batch_ai_content(
                         [clip], words, {0: captions}, platforms,
                         content_type=content_type, topic_focus=topic_focus,
-                        language=language,
+                        language=language, avoid_titles={0: old_titles},
                     ).get(0) or {}
+                    if new.get("ai_ok") is False or not new.get("title"):
+                        # The AI gave no usable answer; don't report success with the old text.
+                        raise RuntimeError(
+                            "The AI didn't return a new title, so nothing was changed. Check that "
+                            "your AI server answers in time and isn't cut off (stop reason "
+                            "'length'), then try again.")
                     if new.get("title"):
                         ai_content = {
                             "title": new["title"],
