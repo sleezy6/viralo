@@ -999,11 +999,14 @@ async def delete_video(
     clips_result = await db.execute(select(Clip).where(Clip.video_id == video_id, Clip.tenant_id == uuid.UUID(token.tenant_id)))
     clips = clips_result.scalars().all()
 
-    # Delete clip storage files
+    # Delete clip storage files: the video, its thumbnail and any upscaled copy
+    # (thumbnails and upscales used to be left behind).
     storage_root = Path(os.getenv("LOCAL_STORAGE_DIR", "/tmp/viralo-storage"))
     for clip in clips:
-        if clip.storage_url:
-            rel = _storage_url_to_relative_path(clip.storage_url)
+        for url in (clip.storage_url, clip.thumbnail_url, clip.upscaled_storage_url):
+            if not url:
+                continue
+            rel = _storage_url_to_relative_path(url.split("?", 1)[0])
             if not rel:
                 continue
             clip_path = (storage_root / rel).resolve()
@@ -1013,6 +1016,16 @@ async def delete_video(
                 clip_path.unlink(missing_ok=True)
             except Exception:
                 pass
+
+    # Delete the original upload. Self-hosted installs keep it after processing
+    # (KEEP_SOURCE_VIDEOS) so clips can be re-rendered; deleting the project is when
+    # it goes, otherwise it would stay on disk forever.
+    if video.original_storage_key:
+        try:
+            from shared.storage.base import get_storage
+            await get_storage(os.getenv("STORAGE_PROVIDER", "local")).delete(video.original_storage_key)
+        except Exception:
+            pass  # already gone (older installs deleted it after processing)
 
     # Delete source/temp files
     temp_dir = Path(os.getenv("VIDEO_TEMP_DIR", "/tmp/viralo-video")) / str(video_id)
