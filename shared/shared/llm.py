@@ -1,7 +1,8 @@
 # Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): added optional
 # self-hosted OpenAI-compatible provider (LOCAL_LLM_*), per-provider timeouts,
-# <think> block stripping in JSON parsing, and a health check that accepts
-# reasoning models and logs why a provider failed.
+# <think> block stripping in JSON parsing, a health check that accepts
+# reasoning models and logs why a provider failed, and a larger reply budget
+# (LOCAL_LLM_MIN_TOKENS) plus optional LOCAL_LLM_EXTRA_BODY for local models.
 """
 Global free-tier LLM fallback utility.
 
@@ -165,7 +166,36 @@ def _local_provider() -> dict | None:
         "model_small": model,
         "json_mode": os.getenv("LOCAL_LLM_JSON_MODE", "false").strip().lower() in ("1", "true", "yes"),
         "timeout": timeout,
+        # Callers size max_tokens for hosted, non-reasoning models. A local reasoning
+        # model spends part of that budget thinking and gets cut off mid-JSON, so give
+        # local calls at least this much room (it costs time, not money).
+        "min_tokens": _env_int("LOCAL_LLM_MIN_TOKENS", 8192),
+        # Optional raw JSON merged into each request, e.g. to turn thinking off:
+        # {"chat_template_kwargs": {"enable_thinking": false}} (server-dependent).
+        "extra_body": _env_json("LOCAL_LLM_EXTRA_BODY"),
     }
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, "") or default)
+    except ValueError:
+        log.warning(f"[LLM] {name} is not a number — using {default}")
+        return default
+
+
+def _env_json(name: str) -> dict | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    try:
+        val = json.loads(raw)
+        if isinstance(val, dict):
+            return val
+    except json.JSONDecodeError:
+        pass
+    log.warning(f"[LLM] {name} must be a JSON object — ignoring it")
+    return None
 
 
 def _build_groq_slots() -> list[dict]:
@@ -569,12 +599,18 @@ def call_llm_json(
             if is_azure:
                 kwargs["max_completion_tokens"] = max_tokens
             else:
-                kwargs["max_tokens"] = max_tokens
+                kwargs["max_tokens"] = max(max_tokens, p.get("min_tokens") or 0)
             if p["json_mode"]:
                 kwargs["response_format"] = {"type": "json_object"}
+            if p.get("extra_body"):
+                kwargs["extra_body"] = p["extra_body"]
             with _LLM_SEM:
                 resp = client.chat.completions.create(**kwargs)
-            content = (resp.choices[0].message.content or "").strip()
+            choice = resp.choices[0]
+            content = (choice.message.content or "").strip()
+            if choice.finish_reason == "length":
+                log.warning(f"[LLM] {name} reply was cut off at max_tokens={kwargs.get('max_tokens')} "
+                            f"(reasoning models think first; raise LOCAL_LLM_MIN_TOKENS or turn thinking off)")
             result = _parse_json(content)
             log.info(f"[LLM] {name} succeeded")
             return result
