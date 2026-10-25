@@ -96,7 +96,8 @@ def _smooth_word_timestamps(words: list[WordTimestamp]) -> list[WordTimestamp]:
             start = prev.end + 0.05
         # Minimum duration 80ms
         end = max(w.end, start + 0.08)
-        smoothed.append(WordTimestamp(word=w.word, start=round(start, 3), end=round(end, 3)))
+        smoothed.append(WordTimestamp(word=w.word, start=round(start, 3), end=round(end, 3),
+                                      speaker=getattr(w, "speaker", None)))
     return smoothed
 
 
@@ -118,32 +119,32 @@ def _generate_captions(words: list[WordTimestamp], clip: ClipResult, max_words: 
     clip_words = _smooth_word_timestamps(clip_words)
 
     segments, current = [], []
-    for w in clip_words:
-        current.append(w)
-        is_break = len(current) >= max_words or w.word.endswith((".", "!", "?", ","))
-        if is_break:
-            seg_start = max(0.0, current[0].start - clip.start - CAPTION_LEAD_SEC)
-            seg_end   = max(seg_start + 0.1, current[-1].end - clip.start)
-            seg_words = [
-                WordTimestamp(cw.word,
-                              max(0.0, cw.start - clip.start - CAPTION_LEAD_SEC),
-                              max(0.0, cw.end   - clip.start))
-                for cw in current
-            ]
-            segments.append(CaptionSegment(text=" ".join(cw.word for cw in current),
-                                           start=seg_start, end=seg_end, words=seg_words))
-            current = []
-    if current:
-        seg_start = max(0.0, current[0].start - clip.start - CAPTION_LEAD_SEC)
-        seg_end   = max(seg_start + 0.1, current[-1].end - clip.start)
+
+    def _flush(cur: list) -> None:
+        seg_start = max(0.0, cur[0].start - clip.start - CAPTION_LEAD_SEC)
+        seg_end   = max(seg_start + 0.1, cur[-1].end - clip.start)
         seg_words = [
             WordTimestamp(cw.word,
                           max(0.0, cw.start - clip.start - CAPTION_LEAD_SEC),
-                          max(0.0, cw.end   - clip.start))
-            for cw in current
+                          max(0.0, cw.end   - clip.start),
+                          getattr(cw, "speaker", None))
+            for cw in cur
         ]
-        segments.append(CaptionSegment(text=" ".join(cw.word for cw in current),
-                                       start=seg_start, end=seg_end, words=seg_words))
+        segments.append(CaptionSegment(text=" ".join(cw.word for cw in cur),
+                                       start=seg_start, end=seg_end, words=seg_words,
+                                       speaker=getattr(cur[0], "speaker", None)))
+
+    for w in clip_words:
+        # A caption never mixes two speakers (diarized transcripts).
+        if current and getattr(w, "speaker", None) != getattr(current[-1], "speaker", None):
+            _flush(current)
+            current = []
+        current.append(w)
+        if len(current) >= max_words or w.word.endswith((".", "!", "?", ",")):
+            _flush(current)
+            current = []
+    if current:
+        _flush(current)
 
     # Extend each segment's end to the next segment's start to eliminate blank frames
     for i in range(len(segments) - 1):
@@ -154,6 +155,7 @@ def _generate_captions(words: list[WordTimestamp], clip: ClipResult, max_words: 
                 start=segments[i].start,
                 end=segments[i + 1].start,
                 words=segments[i].words,
+                speaker=segments[i].speaker,
             )
 
     return segments

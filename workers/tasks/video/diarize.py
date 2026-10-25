@@ -1,3 +1,4 @@
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): speaker turns from a diarizing STT model.
 """
 Stage 6: Speaker diarization.
 When SPEAKER_DIARIZATION_ENABLED=true + HF_TOKEN set: uses pyannote-audio 3.x.
@@ -8,7 +9,8 @@ import os
 
 from workers.tasks.video._core import SpeakerSegment, WordTimestamp
 
-__all__ = ['_diarize_audio', '_assign_speakers_to_words', '_save_speaker_segments']
+__all__ = ['_diarize_audio', '_assign_speakers_to_words', '_save_speaker_segments',
+           '_speaker_segments_from_words']
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +51,21 @@ def _diarize_audio(audio_path: str, duration: float) -> list[SpeakerSegment]:
     except Exception as e:
         log.warning("diarization failed (%s) — falling back to single speaker", e)
         return [SpeakerSegment(start=0.0, end=duration, speaker_id="SPEAKER_00")]
+
+
+def _speaker_segments_from_words(words: list[WordTimestamp]) -> list[SpeakerSegment]:
+    """Speaker turns from a transcript that already names speakers (diarizing speech
+    models such as MOSS-Transcribe-Diarize). Empty when the words carry no speakers."""
+    if not any(getattr(w, "speaker", None) for w in words):
+        return []
+    turns: list[SpeakerSegment] = []
+    for w in words:
+        spk = f"SPEAKER_{int(w.speaker[1:]):02d}" if w.speaker and w.speaker[1:].isdigit() else (w.speaker or "SPEAKER_00")
+        if turns and turns[-1].speaker_id == spk:
+            turns[-1].end = w.end
+        else:
+            turns.append(SpeakerSegment(start=w.start, end=w.end, speaker_id=spk))
+    return turns
 
 
 def _assign_speakers_to_words(

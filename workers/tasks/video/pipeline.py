@@ -458,7 +458,14 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
             # Stage 6: Speaker diarization
             _publish_progress(job_id, "diarization", 36, "processing", "Identifying speakers…")
             audio_path = str(work_dir / "audio.mp3")
-            speaker_segments = _diarize_audio(audio_path if Path(audio_path).exists() else source_path, meta.duration)
+            # The speech model may already say who's talking (e.g. MOSS-Transcribe-Diarize).
+            from workers.tasks.video.diarize import _speaker_segments_from_words
+            speaker_segments = _speaker_segments_from_words(words) or _diarize_audio(
+                audio_path if Path(audio_path).exists() else source_path, meta.duration)
+            if any(getattr(w, "speaker", None) for w in words):
+                n_spk = len({w.speaker for w in words if w.speaker})
+                _publish_progress(job_id, "diarization", 37, "processing",
+                                  f"{n_spk} speaker{'s' if n_spk != 1 else ''} found")
 
             # Stage 7: Topic segmentation
             _publish_progress(job_id, "topic_segmentation", 38, "processing", "Segmenting topics…")

@@ -277,6 +277,7 @@ class WordTimestamp:
     word: str
     start: float
     end: float
+    speaker: str | None = None  # "S1", "S2"… from diarizing speech models; None if unknown
 
 
 @dataclass
@@ -285,6 +286,7 @@ class CaptionSegment:
     start: float
     end: float
     words: list = field(default_factory=list)
+    speaker: str | None = None
 
 
 @dataclass
@@ -465,26 +467,31 @@ def _save_step_artifact(tenant_id: str, video_id: str, step: str, data: dict) ->
 
 def _save_transcript(tenant_id: str, video_id: str, words: list[WordTimestamp]) -> None:
     segments = []
-    current, cur_start = [], None
+
+    def _flush(cur: list) -> None:
+        seg = {
+            "start": cur[0].start, "end": cur[-1].end,
+            "text": " ".join(x.word for x in cur),
+            # Per-word timings, so a clip can be re-rendered later with the same
+            # caption timing (compact [word, start, end(, speaker)]).
+            "words": [[x.word, round(x.start, 3), round(x.end, 3)] + ([x.speaker] if x.speaker else [])
+                      for x in cur],
+        }
+        if cur[0].speaker:
+            seg["speaker"] = cur[0].speaker
+        segments.append(seg)
+
+    current: list = []
     for w in words:
-        if cur_start is None:
-            cur_start = w.start
+        if current and w.speaker != current[-1].speaker:  # one speaker per segment
+            _flush(current)
+            current = []
         current.append(w)
         if w.word.endswith((".", "!", "?")) or len(current) >= 20:
-            segments.append({
-                "start": cur_start, "end": current[-1].end,
-                "text": " ".join(x.word for x in current),
-                # Per-word timings, so a clip can be re-rendered later with the same
-                # caption timing (compact [word, start, end]; readers ignore extra keys).
-                "words": [[x.word, round(x.start, 3), round(x.end, 3)] for x in current],
-            })
-            current, cur_start = [], None
+            _flush(current)
+            current = []
     if current:
-        segments.append({
-            "start": cur_start, "end": current[-1].end,
-            "text": " ".join(x.word for x in current),
-            "words": [[x.word, round(x.start, 3), round(x.end, 3)] for x in current],
-        })
+        _flush(current)
 
     full_text = " ".join(w.word for w in words)
     with _get_session(tenant_id) as session:
@@ -524,7 +531,8 @@ def _load_transcript_words(tenant_id: str, video_id: str) -> list[WordTimestamp]
     for seg in segments:
         saved = seg.get("words")
         if saved:
-            words.extend(WordTimestamp(str(w), float(s), float(e)) for w, s, e in saved)
+            words.extend(WordTimestamp(str(x[0]), float(x[1]), float(x[2]),
+                                       str(x[3]) if len(x) > 3 and x[3] else None) for x in saved)
             continue
         tokens = str(seg.get("text") or "").split()
         if not tokens:

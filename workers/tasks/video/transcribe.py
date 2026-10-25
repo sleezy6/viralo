@@ -130,6 +130,70 @@ def _strip_asr_tags(text: str) -> str:
     return " ".join(_ASR_TAG_RE.sub(" ", text).split())
 
 
+# Diarizing models (e.g. MOSS-Transcribe-Diarize) write "[start][S01]text[end]" pieces.
+_DIAR_PIECE_RE = re.compile(r"\[(\d+(?:\.\d+)?)\]\s*\[(S\d+)\]\s*(.*?)\s*\[(\d+(?:\.\d+)?)\]", re.S)
+_SPEAKER_TAG_RE = re.compile(r"\[(S\d+)\]")
+
+
+def _norm_speaker(label) -> str | None:
+    """'S01' / 'SPEAKER_01' / 1 → 'S1' (None when there's no label)."""
+    if label is None or label == "":
+        return None
+    m = re.search(r"(\d+)", str(label))
+    return f"S{int(m.group(1))}" if m else str(label)[:16]
+
+
+def _diarized_pieces(text_: str) -> list[tuple[float, float, str, str]]:
+    """(start, end, speaker, text) for each timed speaker piece in raw model text."""
+    out = []
+    for m in _DIAR_PIECE_RE.finditer(text_ or ""):
+        body = _strip_asr_tags(m.group(3))
+        if body:
+            out.append((float(m.group(1)), float(m.group(4)), _norm_speaker(m.group(2)), body))
+    return out
+
+
+def _seg_speaker(seg) -> str | None:
+    for key in ("speaker", "speaker_id", "speaker_label"):
+        v = _get_attr(seg, key)
+        if v not in (None, ""):
+            return _norm_speaker(v)
+    m = _SPEAKER_TAG_RE.search(_get_attr(seg, "text") or "")
+    return _norm_speaker(m.group(1)) if m else None
+
+
+def _spread(tokens: list[str], start: float, end: float, offset: float,
+            speaker: str | None) -> list[WordTimestamp]:
+    """Words spread over [start, end] by length, with extra room at punctuation."""
+    dur = max(end - start, 0.01)
+    weights = [max(len(t), 1) + _pause_weight(t) for t in tokens]
+    total, t, out = float(sum(weights)), start, []
+    for tok, wt in zip(tokens, weights):
+        d = dur * wt / total
+        out.append(WordTimestamp(word=tok, start=round(t + offset, 3), end=round(t + d + offset, 3),
+                                 speaker=speaker))
+        t += d
+    return out
+
+
+def _speaker_spans(response) -> list[tuple[float, float, str]]:
+    """Who speaks when (response timebase), from segment fields or inline tags."""
+    spans = []
+    for seg in (getattr(response, "segments", None) or []):
+        s0, s1 = float(_get_attr(seg, "start") or 0), float(_get_attr(seg, "end") or 0)
+        pieces = _diarized_pieces(_get_attr(seg, "text") or "")
+        if pieces:
+            shift = 0.0 if pieces[0][0] >= s0 - 1.0 else s0
+            spans.extend((a + shift, b + shift, spk) for a, b, spk, _ in pieces)
+        else:
+            spk = _seg_speaker(seg)
+            if spk:
+                spans.append((s0, s1, spk))
+    if not spans:
+        spans = [(a, b, spk) for a, b, spk, _ in _diarized_pieces(getattr(response, "text", "") or "")]
+    return spans
+
+
 def _pause_weight(token: str) -> int:
     if token.endswith((".", "!", "?", "…")):
         return 6
@@ -139,6 +203,18 @@ def _pause_weight(token: str) -> int:
 
 
 def _parse_words(response, offset: float) -> list[WordTimestamp]:
+    words = _parse_words_timed(response, offset)
+    if words and any(w.speaker is None for w in words):
+        spans = _speaker_spans(response)
+        if spans:
+            for w in words:
+                if w.speaker is None:
+                    mid = (w.start + w.end) / 2 - offset
+                    w.speaker = next((spk for a, b, spk in spans if a - 0.05 <= mid <= b + 0.05), None)
+    return words
+
+
+def _parse_words_timed(response, offset: float) -> list[WordTimestamp]:
     words = []
     # 1. Top-level response.words
     raw = getattr(response, "words", None) or []
@@ -150,6 +226,7 @@ def _parse_words(response, offset: float) -> list[WordTimestamp]:
             word=text,
             start=round(float(_get_attr(w, "start") or 0) + offset, 3),
             end=round(float(_get_attr(w, "end") or 0) + offset, 3),
+            speaker=_norm_speaker(_get_attr(w, "speaker")),
         ))
     if words:
         return words
@@ -164,6 +241,7 @@ def _parse_words(response, offset: float) -> list[WordTimestamp]:
                 word=text,
                 start=round(float(_get_attr(w, "start") or 0) + offset, 3),
                 end=round(float(_get_attr(w, "end") or 0) + offset, 3),
+                speaker=_norm_speaker(_get_attr(w, "speaker")),
             ))
     if words:
         return words
@@ -173,26 +251,25 @@ def _parse_words(response, offset: float) -> list[WordTimestamp]:
     # causing captions to fall behind on long words and run ahead on short ones.
     # Weighting by character count tracks phoneme count better.
     for seg in (getattr(response, "segments", None) or []):
-        seg_text = _strip_asr_tags(_get_attr(seg, "text") or "")
+        raw = _get_attr(seg, "text") or ""
         seg_start = float(_get_attr(seg, "start") or 0)
         seg_end = float(_get_attr(seg, "end") or 0)
-        tokens = seg_text.split()
-        if not tokens:
+        pieces = _diarized_pieces(raw)
+        if pieces:
+            # Inline piece times are the model's own, finer than the segment's; they're
+            # either in the chunk's timebase or relative to the segment.
+            shift = 0.0 if pieces[0][0] >= seg_start - 1.0 else seg_start
+            for a, b, spk, body in pieces:
+                words.extend(_spread(body.split(), a + shift, max(b, a) + shift, offset, spk))
             continue
-        seg_dur = max(seg_end - seg_start, 0.01)
-        # Speech pauses at punctuation; weighting it keeps long segments (e.g. a
-        # diarization model's whole speaker turn) from drifting as far.
-        char_counts = [max(len(t), 1) + _pause_weight(t) for t in tokens]
-        total_chars = sum(char_counts)
-        t = seg_start
-        for token, chars in zip(tokens, char_counts):
-            dur = seg_dur * (chars / total_chars)
-            words.append(WordTimestamp(
-                word=token,
-                start=round(t + offset, 3),
-                end=round(t + dur + offset, 3),
-            ))
-            t += dur
+        tokens = _strip_asr_tags(raw).split()
+        if tokens:
+            words.extend(_spread(tokens, seg_start, seg_end, offset, _seg_speaker(seg)))
+    if words:
+        return words
+    # 4. No segments, but the text itself is timed speaker pieces.
+    for a, b, spk, body in _diarized_pieces(getattr(response, "text", "") or ""):
+        words.extend(_spread(body.split(), a, max(b, a), offset, spk))
     return words
 
 
@@ -276,7 +353,15 @@ def _transcribe_chunk(groq_client, audio_bytes: bytes, filename: str, offset: fl
             language=lang,
             response_format="json",
         )
-        text_val = _strip_asr_tags(getattr(response, "text", "") or "")
+        raw_text = getattr(response, "text", "") or ""
+        pieces = _diarized_pieces(raw_text)
+        if pieces:
+            words = []
+            for a, b, spk, body in pieces:
+                words.extend(_spread(body.split(), a, max(b, a), offset, spk))
+            logging.info(f"[Whisper] {model}: {len(words)} words, timing from the text's inline timestamps")
+            return words, (used_lang or "")
+        text_val = _strip_asr_tags(raw_text)
         if not text_val:
             return [], ""
         tokens = text_val.split()
@@ -593,17 +678,28 @@ def _build_timed_transcript(words: list[WordTimestamp]) -> str:
     """Build M:SS-stamped transcript lines for LLM input."""
     if not words:
         return ""
-    lines, current, current_start = [], [], words[0].start
+    # With two or more speakers, each line says who's talking ("Speaker 2: …").
+    multi = len({w.speaker for w in words if w.speaker}) >= 2
+    lines, current, current_start, spk = [], [], words[0].start, words[0].speaker
+
+    def _line(start: float, toks: list[str], who: str | None) -> str:
+        m, s = divmod(int(start), 60)
+        tag = f"Speaker {who[1:]}: " if multi and who and who.startswith("S") else (f"{who}: " if multi and who else "")
+        return f"[{m}:{s:02d}] {tag}{' '.join(toks)}"
+
     for w in words:
+        if current and multi and w.speaker != spk:
+            lines.append(_line(current_start, current, spk))
+            current, current_start = [], w.start
+        if not current:
+            spk, current_start = w.speaker, w.start
         current.append(w.word)
         if len(current) >= 10 or w.word.endswith((".", "!", "?", "...", ",")):
-            m, s = divmod(int(current_start), 60)
-            lines.append(f"[{m}:{s:02d}] {' '.join(current)}")
+            lines.append(_line(current_start, current, spk))
             current = []
             current_start = w.end
     if current:
-        m, s = divmod(int(current_start), 60)
-        lines.append(f"[{m}:{s:02d}] {' '.join(current)}")
+        lines.append(_line(current_start, current, spk))
     return "\n".join(lines)
 
 
