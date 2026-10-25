@@ -53,14 +53,17 @@ export function GameField({
   }, []);
 
   const pick = (s: SteamGameSuggestion) => {
-    skipSearch.current = true;
+    // Skip the search the new text would trigger — only if the text actually changes,
+    // otherwise the effect never runs and the flag would swallow the next real search.
+    if (s.name !== text) skipSearch.current = true;
     setText(s.name);
     setOpen(false);
     onChange({ game: s.name, game_appid: s.appid });
   };
 
   return (
-    <div ref={boxRef} className={cn("relative", className)}>
+    <div ref={boxRef} className={cn("relative", className)}
+      onBlur={(e) => { if (!boxRef.current?.contains(e.relatedTarget as Node | null)) setOpen(false); }}>
       <label htmlFor="game-field" className={labelCls}>
         Game <span className="normal-case tracking-normal text-c-text-muted">optional</span>
       </label>
@@ -84,7 +87,11 @@ export function GameField({
           if (e.key === "ArrowDown") { e.preventDefault(); setActive((i) => Math.min(i + 1, items.length - 1)); }
           else if (e.key === "ArrowUp") { e.preventDefault(); setActive((i) => Math.max(i - 1, 0)); }
           else if (e.key === "Enter" && active >= 0) { e.preventDefault(); pick(items[active]); }
-          else if (e.key === "Escape") setOpen(false);
+          else if (e.key === "Escape") {
+            // Close the suggestions only — not the upload dialog this field sits in.
+            e.stopPropagation();
+            setOpen(false);
+          }
         }}
         className={inputCls}
       />

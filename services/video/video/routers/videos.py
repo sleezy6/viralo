@@ -21,7 +21,7 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel as _BaseModel, Field, model_validator
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.auth import decode_token
@@ -125,6 +125,19 @@ log = logging.getLogger(__name__)
 _SIZE_UNITS = {"": 1, "B": 1, "K": 1024, "KB": 1024, "M": 1024**2, "MB": 1024**2,
                "G": 1024**3, "GB": 1024**3, "T": 1024**4, "TB": 1024**4}
 _DEFAULT_MAX_UPLOAD = 10 * 1024**3
+
+
+def _safe_upload_name(filename: str | None) -> str:
+    """The uploaded file's name for disk: letters, digits, spaces and . _ - ( ) only.
+    Characters like # ? % & made the stored path unreadable once it went through URL
+    parsing (and were never needed — the project title is sent separately)."""
+    name = Path(filename or "").name
+    stem, dot, ext = name.rpartition(".")
+    if not dot:
+        stem, ext = name, "mp4"
+    stem = re.sub(r"[^\w .()\-]+", "_", stem).strip(" ._") or "upload"
+    ext = re.sub(r"[^A-Za-z0-9]+", "", ext)[:8] or "mp4"
+    return f"{stem[:120]}.{ext}"
 
 
 def _max_upload_bytes() -> int:
@@ -503,7 +516,7 @@ async def upload_video(
 
     tmp_dir = Path(f"/tmp/viralo-video/{video_id}")
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    safe_name = Path(file.filename).name if file.filename else "upload.mp4"
+    safe_name = _safe_upload_name(file.filename)
     tmp_path = str(tmp_dir / safe_name)
 
     max_upload_bytes = _max_upload_bytes()
@@ -871,18 +884,24 @@ async def update_video(
             raise HTTPException(status_code=422, detail="The project name can't be empty.")
         if title != video.title:
             video.title = title
-            # A name the user chose is never replaced by the automatic game name.
-            meta = video.video_metadata or {}
-            if isinstance(meta, str):
-                try:
-                    meta = json.loads(meta)
-                except ValueError:
-                    meta = {}
-            video.video_metadata = {**(meta if isinstance(meta, dict) else {}), "title_edited": True}
+            # A name the user chose is never replaced by the automatic game name. Set
+            # the flag in SQL so a worker's concurrent metadata write isn't lost.
+            await db.execute(
+                text("""
+                    UPDATE videos
+                       SET metadata = (CASE jsonb_typeof(metadata) WHEN 'object' THEN metadata
+                                            WHEN 'string' THEN (metadata #>> '{}')::jsonb
+                                            ELSE '{}'::jsonb END)
+                                      || '{"title_edited": true}'::jsonb
+                     WHERE id = CAST(:v AS uuid)
+                """),
+                {"v": str(video.id)},
+            )
     if body.topic is not None:
         video.topic = body.topic
 
     await db.commit()
+    await db.refresh(video)
     return VideoResponse.model_validate(video)
 
 
@@ -921,8 +940,19 @@ async def update_video_speakers(
         if "color" in fields and upd.color:
             by_id[upd.id]["color"] = upd.color.upper()
     colors = current.get("colors", True) is not False if body.colors is None else body.colors
-    meta["speakers"] = {"colors": colors, "list": lst}
-    video.video_metadata = meta
+    # Update only the "speakers" key in SQL: rewriting the whole metadata object could
+    # drop a key a worker merged in meanwhile (game, AI metadata, …).
+    await db.execute(
+        text("""
+            UPDATE videos
+               SET metadata = (CASE jsonb_typeof(metadata) WHEN 'object' THEN metadata
+                                    WHEN 'string' THEN (metadata #>> '{}')::jsonb
+                                    ELSE '{}'::jsonb END)
+                              || jsonb_build_object('speakers', CAST(:sp AS jsonb))
+             WHERE id = CAST(:v AS uuid)
+        """),
+        {"sp": json.dumps({"colors": colors, "list": lst}), "v": str(video.id)},
+    )
     await db.commit()
     await db.refresh(video)
     return VideoResponse.model_validate(video)
@@ -1089,63 +1119,31 @@ async def delete_video(
     clips_result = await db.execute(select(Clip).where(Clip.video_id == video_id, Clip.tenant_id == uuid.UUID(token.tenant_id)))
     clips = clips_result.scalars().all()
 
-    # Delete clip storage files: the video, its thumbnail and any upscaled copy
-    # (thumbnails and upscales used to be left behind).
+    # Database first, files second: if a database step fails nothing is lost (the
+    # project stays as it was); if a file delete fails the cleanup tool finds it later.
+    # (Deleting files first could leave a live project whose original was already gone.)
     storage_root = Path(os.getenv("LOCAL_STORAGE_DIR", "/tmp/viralo-storage"))
+    clip_files: list[Path] = []
     for clip in clips:
         for url in (clip.storage_url, clip.thumbnail_url, clip.upscaled_storage_url):
-            if not url:
-                continue
-            rel = _storage_url_to_relative_path(url.split("?", 1)[0])
-            if not rel:
-                continue
-            clip_path = (storage_root / rel).resolve()
-            if storage_root.resolve() not in clip_path.parents:
-                continue
-            try:
-                clip_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-
-    # Delete the original upload. Self-hosted installs keep it after processing
-    # (KEEP_SOURCE_VIDEOS) so clips can be re-rendered; deleting the project is when
-    # it goes, otherwise it would stay on disk forever.
-    if video.original_storage_key:
-        freed = 0
-        if os.getenv("STORAGE_PROVIDER", "local") == "local":
-            rel = video.original_storage_key.removeprefix("/storage/").lstrip("/")
-            orig = (storage_root / rel).resolve()
-            if storage_root.resolve() in orig.parents and orig.is_file():
-                freed = orig.stat().st_size
-        try:
-            from shared.storage.base import get_storage
-            await get_storage(os.getenv("STORAGE_PROVIDER", "local")).delete(video.original_storage_key)
-        except Exception as e:
-            log.warning("Could not delete original %s: %s", video.original_storage_key, e)
-            freed = 0
-        if freed:
-            # The "Cloud Storage" counter counts uploaded originals; it only ever went up.
-            try:
-                await increment_storage_used(pub_db, uuid.UUID(token.tenant_id), -freed)
-            except Exception:
-                pass
-
-    # Delete source/temp files
-    temp_dir = Path(os.getenv("VIDEO_TEMP_DIR", "/tmp/viralo-video")) / str(video_id)
-    shutil.rmtree(temp_dir, ignore_errors=True)
+            rel = _storage_url_to_relative_path(url.split("?", 1)[0]) if url else None
+            if rel:
+                clip_path = (storage_root / rel).resolve()
+                if storage_root.resolve() in clip_path.parents:
+                    clip_files.append(clip_path)
+    original_key = video.original_storage_key
 
     # Nullify clip_id on scheduled posts, and delete captions, to avoid FK
     # violations when deleting clips (captions.clip_id has no ON DELETE CASCADE).
     clip_ids = [str(c.id) for c in clips]
     if clip_ids:
-        from sqlalchemy import text as sa_text
         # Use ANY(:arr) with parameterized array — no string interpolation
         await db.execute(
-            sa_text("UPDATE scheduled_posts SET clip_id = NULL WHERE tenant_id = CAST(:tid AS uuid) AND clip_id = ANY(:ids)"),
+            text("UPDATE scheduled_posts SET clip_id = NULL WHERE tenant_id = CAST(:tid AS uuid) AND clip_id = ANY(:ids)"),
             {"tid": str(token.tenant_id), "ids": clip_ids},
         )
         await db.execute(
-            sa_text("DELETE FROM captions WHERE tenant_id = CAST(:tid AS uuid) AND clip_id = ANY(:ids)"),
+            text("DELETE FROM captions WHERE tenant_id = CAST(:tid AS uuid) AND clip_id = ANY(:ids)"),
             {"tid": str(token.tenant_id), "ids": clip_ids},
         )
 
@@ -1162,6 +1160,40 @@ async def delete_video(
         await db.delete(clip)
     video.status = "deleted"
     await db.commit()
+
+    # Files: clip videos, thumbnails and upscaled copies.
+    for clip_path in clip_files:
+        try:
+            clip_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    # The original upload. Self-hosted installs keep it after processing
+    # (KEEP_SOURCE_VIDEOS) so clips can be re-rendered; deleting the project is when
+    # it goes, otherwise it would stay on disk forever.
+    if original_key:
+        freed = 0
+        if os.getenv("STORAGE_PROVIDER", "local") == "local":
+            from shared.storage.local import storage_key
+            orig = (storage_root / storage_key(original_key)).resolve()
+            if storage_root.resolve() in orig.parents and orig.is_file():
+                freed = orig.stat().st_size
+        try:
+            from shared.storage.base import get_storage
+            await get_storage(os.getenv("STORAGE_PROVIDER", "local")).delete(original_key)
+        except Exception as e:
+            log.warning("Could not delete original %s: %s", original_key, e)
+            freed = 0
+        if freed:
+            # The "Cloud Storage" counter counts uploaded originals.
+            try:
+                await increment_storage_used(pub_db, uuid.UUID(token.tenant_id), -freed)
+            except Exception:
+                pass
+
+    # Delete source/temp files
+    temp_dir = Path(os.getenv("VIDEO_TEMP_DIR", "/tmp/viralo-video")) / str(video_id)
+    shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 @router.post("/videos/{video_id}/cancel", response_model=VideoResponse)
@@ -1766,6 +1798,43 @@ def _queue_regenerate(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
     _get_celery().send_task("workers.tasks.video.regenerate_clips", args=args)
 
 
+async def _claim_and_queue(db: AsyncSession, tenant_id: str, video_id: str, clips: list[Clip],
+                           mode: str, timing: dict | None = None) -> list[str]:
+    """Mark clips "regenerating" and queue the job.
+
+    The claim is one conditional UPDATE (only clips still idle), so two quick clicks
+    can't both queue a render of the same clip. updated_at is stamped so the
+    reconciler can tell a live regenerate from one whose worker died. If the job can't
+    be queued (task queue down), the clips get their previous status back instead of
+    staying "regenerating" — which would refuse every later attempt."""
+    before = {str(c.id): c.status for c in clips}
+    res = await db.execute(
+        text("""
+            UPDATE clips SET status = 'regenerating', updated_at = NOW()
+             WHERE id = ANY(CAST(:ids AS uuid[])) AND tenant_id = CAST(:t AS uuid)
+               AND status IN ('ready', 'upload_failed', 'failed')
+            RETURNING id
+        """),
+        {"ids": list(before), "t": str(tenant_id)},
+    )
+    claimed = [str(r[0]) for r in res.fetchall()]
+    await db.commit()
+    if not claimed:
+        return []
+    claimed = [cid for cid in before if cid in set(claimed)]  # keep the caller's order
+    try:
+        _queue_regenerate(tenant_id, video_id, claimed, mode, timing)
+    except Exception as e:
+        log.error("Could not queue regenerate for %s: %s", claimed, e)
+        for cid in claimed:
+            await db.execute(text("UPDATE clips SET status = :st WHERE id = CAST(:id AS uuid) AND status = 'regenerating'"),
+                             {"st": before[cid], "id": cid})
+        await db.commit()
+        raise HTTPException(status_code=503,
+                            detail="Couldn't start the job (the task queue isn't reachable). Try again in a moment.")
+    return claimed
+
+
 async def _regen_timing(db: AsyncSession, clip: Clip, body: RegenerateRequest) -> dict | None:
     """Validate new start/end times for a re-cut; None when the clip keeps its times."""
     if body.start_sec is None and body.end_sec is None:
@@ -1805,10 +1874,9 @@ async def regenerate_clip(
     if clip.status not in _REGEN_READY_STATUSES:
         raise HTTPException(status_code=409, detail=f"Clip is busy ({clip.status}); try again when it's ready.")
     timing = await _regen_timing(db, clip, body)
-    clip.status = "regenerating"
-    await db.commit()
+    if not await _claim_and_queue(db, token.tenant_id, str(clip.video_id), [clip], body.mode, timing):
+        raise HTTPException(status_code=409, detail="Clip is busy; try again when it's ready.")
     await db.refresh(clip)
-    _queue_regenerate(token.tenant_id, str(clip.video_id), [str(clip.id)], body.mode, timing)
     return clip
 
 
@@ -1858,11 +1926,10 @@ async def apply_clip_edits(
         if text_ and e - s >= 0.05:
             items.append({"text": text_, "start": round(s, 3), "end": round(e, 3)})
     items.sort(key=lambda it: it["start"])
-    clip.status = "regenerating"
-    await db.commit()
+    if not await _claim_and_queue(db, token.tenant_id, str(clip.video_id), [clip], "render",
+                                  {"start": start, "end": end, "captions": items}):
+        raise HTTPException(status_code=409, detail="Clip is busy; try again when it's ready.")
     await db.refresh(clip)
-    _queue_regenerate(token.tenant_id, str(clip.video_id), [str(clip.id)], "render",
-                      {"start": start, "end": end, "captions": items})
     return clip
 
 
@@ -1875,6 +1942,8 @@ async def regenerate_video_clips(
 ):
     """Regenerate every clip of a video that isn't busy. One background job handles
     them in order, so the source video is fetched once."""
+    if body.start_sec is not None or body.end_sec is not None:
+        raise HTTPException(status_code=422, detail="New start/end times can only be set for one clip at a time.")
     tenant = uuid.UUID(token.tenant_id)
     video = (await db.execute(select(Video).where(Video.id == video_id, Video.tenant_id == tenant))).scalar_one_or_none()
     if not video:
@@ -1884,13 +1953,9 @@ async def regenerate_video_clips(
                            Clip.status.in_(_REGEN_READY_STATUSES))
         .order_by(Clip.start_sec)
     )).scalars().all()
-    if not clips:
+    clip_ids = await _claim_and_queue(db, token.tenant_id, str(video_id), list(clips), body.mode) if clips else []
+    if not clip_ids:
         raise HTTPException(status_code=409, detail="No clips are ready to regenerate.")
-    for c in clips:
-        c.status = "regenerating"
-    await db.commit()
-    clip_ids = [str(c.id) for c in clips]
-    _queue_regenerate(token.tenant_id, str(video_id), clip_ids, body.mode)
     return {"queued": len(clip_ids), "clip_ids": clip_ids, "mode": body.mode}
 
 

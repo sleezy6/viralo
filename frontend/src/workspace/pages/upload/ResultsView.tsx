@@ -597,7 +597,7 @@ export function ResultsView({
 
       {detailClip && (
         <ClipDetailModal
-          clip={detailClip}
+          clip={clips.find((c) => c.id === detailClip.id) ?? detailClip}
           isPosted={postedClipIds.has(detailClip.id)}
           isScheduled={scheduledClipIds.has(detailClip.id)}
           posts={postsByClipId.get(detailClip.id) ?? []}

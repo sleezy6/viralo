@@ -73,6 +73,7 @@ __all__ = [
     '_publish_progress',
     '_publish_clip_event',
     '_update_video',
+    '_merge_video_metadata',
     '_check_cancelled',
     '_save_step_artifact',
     '_save_transcript',
@@ -416,6 +417,26 @@ def _publish_clip_event(job_id: str, event: str, payload: dict) -> None:
             redis_client.publish(channel, msg)
         except Exception as exc:
             logging.warning("Could not publish clip event on %s: %s", channel, exc)
+
+
+def _merge_video_metadata(tenant_id: str, video_id: str, patch: dict) -> None:
+    """Add/overwrite keys in videos.metadata, keeping the others (also when an older
+    write stored the metadata as a JSON string)."""
+    if not patch:
+        return
+    with _get_session(tenant_id) as session:
+        session.execute(
+            text("""
+                UPDATE videos
+                   SET metadata = (CASE jsonb_typeof(metadata)
+                                     WHEN 'object' THEN metadata
+                                     WHEN 'string' THEN (metadata #>> '{}')::jsonb
+                                     ELSE '{}'::jsonb END) || CAST(:m AS jsonb),
+                       updated_at = NOW()
+                 WHERE id = CAST(:vid AS uuid)
+            """),
+            {"m": json.dumps(patch), "vid": video_id},
+        )
 
 
 def _update_video(tenant_id: str, video_id: str, notify_webhook: bool = True, **kwargs) -> None:

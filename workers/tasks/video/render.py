@@ -1746,7 +1746,10 @@ def _render_clip_ffmpeg_captions(*args, **kwargs) -> None:
         return _render_clip_ffmpeg_captions_impl(*args, **kwargs)
     except Exception as e:
         st = hwaccel.status()
-        if not (st["pyav"] or st["ffmpeg"]):
+        # Only a GPU encoder failure switches to the CPU. Anything else (bad source,
+        # timeout, out of time) would fail the same way on the CPU, and turning the GPU
+        # off for the rest of this worker's life over it would just slow every clip.
+        if not (st["pyav"] or st["ffmpeg"]) or not hwaccel.is_gpu_error(e):
             raise
         hwaccel.disable(str(e))
         logging.warning("[HW] redoing this clip on the CPU")

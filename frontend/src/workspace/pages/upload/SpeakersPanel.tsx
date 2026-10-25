@@ -21,10 +21,15 @@ export function SpeakersPanel({ video, onVideoChange, onRerender }: {
   const [colors, setColors] = useState<Record<string, string>>({});
   const colorTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(colorTimer.current), []);
+  // The name field being typed in: a save of something else (a colour, another name)
+  // returns the server's copy, which must not overwrite what's being typed.
+  const editingName = useRef<string | null>(null);
 
   useEffect(() => {
-    setNames(Object.fromEntries((sp?.list ?? []).map((s) => [s.id, s.name ?? ""])));
-    setColors(Object.fromEntries((sp?.list ?? []).map((s) => [s.id, s.color])));
+    const list = sp?.list ?? [];
+    setNames((prev) => Object.fromEntries(list.map((s) => [
+      s.id, s.id === editingName.current && s.id in prev ? prev[s.id] : (s.name ?? "")])));
+    setColors(Object.fromEntries(list.map((s) => [s.id, s.color])));
   }, [sp]);
 
   if (!sp || sp.list.length === 0) return null;
@@ -99,9 +104,9 @@ export function SpeakersPanel({ video, onVideoChange, onRerender }: {
               value={names[s.id] ?? ""}
               placeholder={label(s)}
               maxLength={40}
-              disabled={busy}
+              onFocus={() => { editingName.current = s.id; }}
               onChange={(e) => setNames((n) => ({ ...n, [s.id]: e.target.value }))}
-              onBlur={() => commitName(s)}
+              onBlur={() => { editingName.current = null; commitName(s); }}
               onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
               className="w-[118px] min-w-0 bg-transparent text-[13px] font-semibold text-c-text outline-none placeholder:font-normal placeholder:text-c-text-muted"
             />

@@ -1,4 +1,5 @@
 // Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): editor Apply to clip.
+import { CLIP_BUSY_STATUSES } from "./upload/RegenerateDialog";
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -89,14 +90,14 @@ const ClipCard = memo(function ClipCard({ clip, active, onClick, onRetry, delay 
         )}
 
         {/* Upload state overlays */}
-        {(clip.status === "pending_upload" || clip.status === "uploading") && (
+        {(clip.status === "pending_upload" || clip.status === "uploading" || clip.status === "regenerating") && (
           <div className="absolute inset-0 z-[2] flex flex-col items-center justify-center gap-2 bg-black/60 backdrop-blur-[2px]">
             <svg className="h-6 w-6 animate-spin text-white/80" viewBox="0 0 24 24" fill="none">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
             </svg>
             <span className="text-[11px] font-semibold text-white/70">
-              {clip.status === "uploading" ? "Uploading…" : "Queued"}
+              {clip.status === "uploading" ? "Uploading…" : clip.status === "regenerating" ? "Regenerating…" : "Queued"}
             </span>
           </div>
         )}
@@ -134,10 +135,15 @@ const ClipCard = memo(function ClipCard({ clip, active, onClick, onRetry, delay 
             </div>
           </div>
           {description && <p className="line-clamp-2 min-h-9 text-[12px] leading-[1.45] text-c-text-muted">{description}</p>}
+          {clip.clip_metadata?.regenerate_error && !CLIP_BUSY_STATUSES.includes(clip.status) && (
+            <p role="alert" className="rounded-[8px] border border-red-400/25 bg-red-400/10 px-2.5 py-1.5 text-[11.5px] leading-snug text-red-300">
+              Regenerate failed: {clip.clip_metadata.regenerate_error}
+            </p>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-c-text-muted">
-          <Badge variant={clip.status === "ready" ? "ready" : ["pending_upload","uploading"].includes(clip.status) ? "warn" : clip.status === "upload_failed" ? "error" : clip.status === "processing" ? "warn" : "muted"}>{clip.status === "pending_upload" ? "queued" : clip.status === "upload_failed" ? "failed" : clip.status}</Badge>
+          <Badge variant={clip.status === "ready" ? "ready" : ["pending_upload","uploading","regenerating"].includes(clip.status) ? "warn" : clip.status === "upload_failed" ? "error" : clip.status === "processing" ? "warn" : "muted"}>{clip.status === "pending_upload" ? "queued" : clip.status === "upload_failed" ? "failed" : clip.status}</Badge>
           <span className="rounded-full bg-surface-3 px-2 py-1">{tags.length} tags</span>
           <span className="rounded-full bg-surface-3 px-2 py-1">{new Date(clip.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
           {clipStart && clipEnd && <span className="rounded-full bg-surface-3 px-2 py-1 font-mono">{clipStart}–{clipEnd}</span>}
@@ -542,7 +548,7 @@ const STATUS_OPTIONS = [
   { id: "pending_upload", label: "Queued",     match: (c: ClipApiResponse) => c.status === "pending_upload" },
   { id: "uploading",      label: "Uploading",  match: (c: ClipApiResponse) => c.status === "uploading" },
   { id: "upload_failed",  label: "Failed",     match: (c: ClipApiResponse) => c.status === "upload_failed" || c.status === "failed" },
-  { id: "processing",     label: "Processing", match: (c: ClipApiResponse) => c.status === "processing" },
+  { id: "processing",     label: "Processing", match: (c: ClipApiResponse) => c.status === "processing" || c.status === "regenerating" },
 ];
 const DURATION_OPTIONS = [
   { id: "short",  label: "< 30s",    match: (c: ClipApiResponse) => (c.duration_ms ?? 0) < 30_000 },
@@ -695,13 +701,29 @@ export function ClipsPage() {
     load();
   }, [page, minViralityScore, sort]);
 
+  // Follow regenerating/uploading clips until they settle. The live stream only reports
+  // upload results; a regenerate that fails (or finishes before the stream connects)
+  // is only visible by asking for the clip again.
+  const busyIds = useMemo(() => clips.filter((c) => CLIP_BUSY_STATUSES.includes(c.status)).map((c) => c.id).join(","), [clips]);
+  useEffect(() => {
+    if (!busyIds) return;
+    const ids = busyIds.split(",");
+    const t = window.setInterval(() => {
+      void Promise.all(ids.map((id) => videoApi.getClip(id).catch(() => null))).then((fresh) => {
+        const byId = new Map(fresh.filter((c): c is ClipApiResponse => !!c).map((c) => [c.id, c]));
+        if (byId.size) setClips((prev) => prev.map((c) => byId.get(c.id) ?? c));
+      });
+    }, 5000);
+    return () => window.clearInterval(t);
+  }, [busyIds]);
+
   // Ref-based SSE subscriptions — keyed by video_id so we never double-subscribe or loop
   const sseSourcesRef = useRef<Map<string, EventSource>>(new Map());
 
   useEffect(() => {
     const pendingVideoIds = new Set(
       clips
-        .filter((c) => c.status === "pending_upload" || c.status === "uploading")
+        .filter((c) => CLIP_BUSY_STATUSES.includes(c.status))
         .map((c) => String(c.video_id))
     );
 
@@ -1033,7 +1055,7 @@ export function ClipsPage() {
                         <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:gap-2">
                           <p className="flex-1 truncate text-[13px] font-semibold leading-[1.3]">{clip.title ?? "Untitled clip"}</p>
                           <div className="flex shrink-0 items-center gap-1.5">
-                            <Badge variant={clip.status === "ready" ? "ready" : ["pending_upload","uploading"].includes(clip.status) ? "warn" : clip.status === "upload_failed" ? "error" : clip.status === "processing" ? "warn" : "muted"}>{clip.status === "pending_upload" ? "queued" : clip.status === "upload_failed" ? "failed" : clip.status}</Badge>
+                            <Badge variant={clip.status === "ready" ? "ready" : ["pending_upload","uploading","regenerating"].includes(clip.status) ? "warn" : clip.status === "upload_failed" ? "error" : clip.status === "processing" ? "warn" : "muted"}>{clip.status === "pending_upload" ? "queued" : clip.status === "upload_failed" ? "failed" : clip.status}</Badge>
                             {isPosted && <span className="rounded-full bg-amber-500/20 px-1.5 py-px text-[9px] font-bold text-amber-400">Live</span>}
                             {!isPosted && isScheduled && <span className="rounded-full bg-blue-500/15 px-1.5 py-px text-[9px] font-bold text-blue-400">Queued</span>}
                           </div>

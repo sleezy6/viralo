@@ -21,9 +21,13 @@ export function EditableTitle({ video, onRenamed, className }: {
   useEffect(() => { if (!editing) setValue(video.title ?? ""); }, [video.title, editing]);
   useEffect(() => { if (editing) inputRef.current?.select(); }, [editing]);
 
+  const savingRef = useRef(false);
+
   async function save() {
+    if (savingRef.current) return;  // Enter then the blur it causes: save once
     const title = value.trim();
     if (!title || title === (video.title ?? "")) { setEditing(false); setError(""); return; }
+    savingRef.current = true;
     setSaving(true);
     setError("");
     try {
@@ -31,8 +35,9 @@ export function EditableTitle({ video, onRenamed, className }: {
       setEditing(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't rename. Try again.");
-      inputRef.current?.focus();
+      inputRef.current?.focus();  // the field stays focusable (readOnly, not disabled)
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }
@@ -45,7 +50,8 @@ export function EditableTitle({ video, onRenamed, className }: {
           aria-label="Project name"
           value={value}
           maxLength={255}
-          disabled={saving}
+          readOnly={saving}
+          aria-busy={saving}
           onChange={(e) => setValue(e.target.value)}
           onBlur={() => void save()}
           onKeyDown={(e) => {

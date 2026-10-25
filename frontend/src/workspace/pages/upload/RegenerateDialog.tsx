@@ -1,5 +1,5 @@
 // Added 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0).
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { videoApi, type ClipApiResponse, type RegenerateMode } from "@/lib/api";
 
@@ -23,13 +23,43 @@ function fmtTime(sec: number): string {
   return `${m}:${(s - m * 60).toFixed(1).padStart(4, "0")}`;
 }
 
+/** Longest clip the server accepts for a re-cut (videos.py _MAX_CLIP_SEC). */
+export const MAX_CLIP_SEC = 600;
+
+/** A seconds field that keeps what's typed and only clamps it on Enter or leaving the
+ *  field — clamping on every keystroke turned "45" into 31, then 315. */
+function SecondsInput({ value, onCommit, label, max }: {
+  value: number; onCommit: (v: number) => void; label: string; max: number | null;
+}) {
+  const [draft, setDraft] = useState(String(Number(value.toFixed(2))));
+  const [editing, setEditing] = useState(false);
+  useEffect(() => { if (!editing) setDraft(String(Number(value.toFixed(2)))); }, [value, editing]);
+  const commit = () => {
+    setEditing(false);
+    const v = parseFloat(draft);
+    if (Number.isNaN(v)) setDraft(String(Number(value.toFixed(2))));
+    else onCommit(v);
+  };
+  return (
+    <input type="number" step="0.5" min={0} max={max ?? undefined} aria-label={`${label} (seconds)`}
+      value={draft}
+      onFocus={() => setEditing(true)}
+      onChange={(e) => { setEditing(true); setDraft(e.target.value); }}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }}
+      className="mb-1.5 w-full rounded-[8px] border border-c-border bg-surface-2 px-2.5 py-1.5 font-mono text-[12.5px] text-c-text outline-none focus:border-[#ff3d6a]/50" />
+  );
+}
+
 /** Start/end of the clip in the original video, with nudge buttons to extend it. */
 function ClipTiming({ start, end, origStart, origEnd, max, onChange }: {
   start: number; end: number; origStart: number; origEnd: number; max: number | null;
   onChange: (start: number, end: number) => void;
 }) {
-  const clampEnd = (v: number) => Math.max(start + 1, max ? Math.min(v, max) : v);
-  const clampStart = (v: number) => Math.min(Math.max(0, v), end - 1);
+  // At least 1 s long, at most MAX_CLIP_SEC, inside the video.
+  const clampEnd = (v: number) =>
+    Math.max(start + 1, Math.min(v, start + MAX_CLIP_SEC, max && max > 0 ? max : Infinity));
+  const clampStart = (v: number) => Math.min(Math.max(0, v, end - MAX_CLIP_SEC), end - 1);
   const nudge = (label: string, fn: () => void, disabled: boolean) => (
     <button type="button" onClick={fn} disabled={disabled}
       className="rounded-[7px] border border-c-border bg-surface-2 px-2 py-1 font-mono text-[11.5px] font-semibold text-c-text-secondary transition hover:border-c-border-hover hover:text-c-text disabled:opacity-40">
@@ -61,17 +91,14 @@ function ClipTiming({ start, end, origStart, origEnd, max, onChange }: {
              ["+5s", () => onChange(clampStart(start + 5), end), start >= end - 1]]],
           ["End", end, (v: number) => onChange(start, clampEnd(v)),
             [["−5s", () => onChange(start, clampEnd(end - 5)), end <= start + 1],
-             ["+5s", () => onChange(start, clampEnd(end + 5)), !!max && end >= max],
-             ["+15s", () => onChange(start, clampEnd(end + 15)), !!max && end >= max]]],
+             ["+5s", () => onChange(start, clampEnd(end + 5)), (!!max && end >= max) || end - start >= MAX_CLIP_SEC],
+             ["+15s", () => onChange(start, clampEnd(end + 15)), (!!max && end >= max) || end - start >= MAX_CLIP_SEC]]],
         ] as const).map(([label, val, set, btns]) => (
           <div key={label}>
             <label className="mb-1 block text-[11.5px] text-c-text-muted">
               {label} <span className="font-mono">{fmtTime(val)}</span>
             </label>
-            <input type="number" step="0.5" min={0} max={max ?? undefined} aria-label={`${label} (seconds)`}
-              value={Number(val.toFixed(2))}
-              onChange={(e) => { const v = parseFloat(e.target.value); if (!Number.isNaN(v)) set(v); }}
-              className="mb-1.5 w-full rounded-[8px] border border-c-border bg-surface-2 px-2.5 py-1.5 font-mono text-[12.5px] text-c-text outline-none focus:border-[#ff3d6a]/50" />
+            <SecondsInput value={val} onCommit={set} label={label} max={max} />
             <div className="flex flex-wrap gap-1.5">{btns.map(([l, fn, dis]) => <span key={l}>{nudge(l, fn, dis)}</span>)}</div>
           </div>
         ))}
@@ -80,7 +107,7 @@ function ClipTiming({ start, end, origStart, origEnd, max, onChange }: {
         {notes.length
           ? <>New length {fmtTime(end - start)} ({notes.join(", ")}).{" "}
               <button type="button" onClick={() => onChange(origStart, origEnd)} className="underline hover:text-c-text">Reset</button></>
-          : "Times are in the original video. Move the end later to include what comes after the clip."}
+          : `Times are in the original video. Move the end later to include what comes after the clip (up to ${MAX_CLIP_SEC / 60} minutes long).`}
       </p>
     </div>
   );

@@ -2,7 +2,7 @@
 // Added 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0).
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
-import { act } from "react";
+import { act, useState } from "react";
 import type { VideoResponse } from "@/lib/api";
 
 const updateSpeakers = vi.fn();
@@ -52,5 +52,23 @@ describe("SpeakersPanel", () => {
     act(() => host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
     await act(async () => { await Promise.resolve(); });
     expect(updateSpeakers).toHaveBeenCalledWith("v1", { colors: false });
+  });
+
+  it("keeps a name being typed when another save comes back", async () => {
+    let rerender: (v: VideoResponse) => void = () => {};
+    function Host() {
+      const [v, setV] = useState(video);
+      rerender = setV;
+      return <SpeakersPanel video={v} onVideoChange={setV} onRerender={() => {}} />;
+    }
+    act(() => root.render(<Host />));
+    const name = host.querySelector<HTMLInputElement>('input[aria-label="Name for Speaker 1"]')!;
+    act(() => { name.dispatchEvent(new FocusEvent("focusin", { bubbles: true })); });
+    setValue(name, "Ri");
+    // a colour save for Speaker 2 returns the server's copy (Speaker 1 still unnamed)
+    act(() => rerender({ ...video, speakers: { colors: true, list: [
+      { id: "S1", name: null, color: "#FFFFFF" }, { id: "S2", name: "Sam", color: "#FF7AC6" }] } } as unknown as VideoResponse));
+    expect(name.value).toBe("Ri");
+    expect(name.disabled).toBe(false);
   });
 });

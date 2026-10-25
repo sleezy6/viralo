@@ -1,11 +1,15 @@
-# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): added download(), URL-form delete, streamed upload.
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): added download(), URL-form delete,
+# streamed upload off the event loop, file names with # ? % handled.
+import asyncio
 import os
 import hashlib
 import hmac
+import re
+import shutil
 import time
 import aiofiles
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 from shared.storage.base import StorageAdapter
 from shared.config import settings
 
@@ -22,6 +26,21 @@ def _safe_local_path(path: str) -> Path:
     if target != base and base not in target.parents:
         raise ValueError("Storage path escapes local storage root")
     return target
+
+
+_SIGNED_QUERY = re.compile(r"\?(?:[^#]*&)?(?:expires|sig)=")
+
+
+def storage_key(path: str) -> str:
+    """Storage key ("originals/t/v/Clip #3.mp4") from a key or a /storage/ URL.
+
+    Only a signed URL (…?expires=…&sig=…, built by sign_local_url with the path
+    percent-encoded) is split at "?" and decoded. upload() returns the raw path, and
+    file names may legitimately contain "#", "?" or "%"; splitting or decoding those
+    cut "Clip #3.mp4" down to "Clip " so the file could be neither read nor deleted."""
+    if _SIGNED_QUERY.search(path):
+        path = unquote(path.split("?", 1)[0])
+    return path.removeprefix("/storage/").lstrip("/")
 
 
 def sign_local_url(path: str, expires_in: int = LOCAL_STORAGE_URL_TTL_SECONDS, now: int | None = None) -> str:
@@ -53,14 +72,17 @@ class LocalStorageAdapter(StorageAdapter):
     async def upload(self, data, path: str, content_type: str = "video/mp4") -> str:
         full_path = _safe_local_path(path)
         full_path.parent.mkdir(parents=True, exist_ok=True)
-        async with aiofiles.open(full_path, "wb") as f:
-            if isinstance(data, bytes):
+        if isinstance(data, bytes):
+            async with aiofiles.open(full_path, "wb") as f:
                 await f.write(data)
-            else:
-                # Stream in 8 MB pieces: reading a whole upload (often >1 GB) into
-                # memory first could fail on small machines and leave a partial file.
-                while chunk := data.read(8 * 1024 * 1024):
-                    await f.write(chunk)
+        else:
+            # Copy in 8 MB pieces on a worker thread: reading a whole upload (often
+            # several GB) into memory could fail on small machines, and a blocking copy
+            # on the event loop froze every other request on this API worker meanwhile.
+            def _copy() -> None:
+                with open(full_path, "wb") as out:
+                    shutil.copyfileobj(data, out, 8 * 1024 * 1024)
+            await asyncio.to_thread(_copy)
         return f"/storage/{path.lstrip('/')}"
 
     async def get_signed_url(self, path: str, expires_in: int = 3600) -> str:
@@ -71,9 +93,7 @@ class LocalStorageAdapter(StorageAdapter):
         URL upload() returned ("/storage/clips/a.mp4", optionally signed). The other
         backends implement this; without it, publishing and clip re-export crashed
         with AttributeError on local storage."""
-        import shutil
-        from urllib.parse import unquote, urlsplit
-        relative = unquote(urlsplit(path).path).removeprefix("/storage/").lstrip("/")
+        relative = storage_key(path)
         src = _safe_local_path(relative)
         if not src.is_file():
             raise FileNotFoundError(f"Local storage file not found: {relative}")
@@ -84,9 +104,7 @@ class LocalStorageAdapter(StorageAdapter):
         """Delete a stored file. Accepts a storage key ("originals/a.mp4") or the URL
         upload() returned ("/storage/originals/a.mp4", optionally signed); the URL
         form used to be rejected as an absolute path, so deletes silently did nothing."""
-        from urllib.parse import unquote, urlsplit
-        relative = unquote(urlsplit(path).path).removeprefix("/storage/").lstrip("/")
-        full_path = _safe_local_path(relative)
+        full_path = _safe_local_path(storage_key(path))
         if full_path.is_file():
             full_path.unlink()
         # Drop folders the file leaves empty (e.g. originals/<account>/<project>/).

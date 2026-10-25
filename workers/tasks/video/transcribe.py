@@ -20,6 +20,12 @@ import re
 import shutil
 import subprocess
 import uuid
+
+try:
+    from celery.exceptions import SoftTimeLimitExceeded
+except ImportError:  # pragma: no cover
+    class SoftTimeLimitExceeded(Exception):
+        pass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace as dataclass_replace
@@ -132,7 +138,11 @@ def _strip_asr_tags(text: str) -> str:
 
 
 # Diarizing models (e.g. MOSS-Transcribe-Diarize) write "[start][S01]text[end]" pieces.
-_DIAR_PIECE_RE = re.compile(r"\[(\d+(?:\.\d+)?)\]\s*\[(S\d+)\]\s*(.*?)\s*\[(\d+(?:\.\d+)?)\]", re.S)
+# The closing [end] must be followed by the next piece or the end of the text, so a
+# number in brackets inside the speech ("[2] to [1]") doesn't end the piece early.
+_DIAR_PIECE_RE = re.compile(
+    r"\[(\d+(?:\.\d+)?)\]\s*\[(S\d+)\]\s*(.*?)\s*\[(\d+(?:\.\d+)?)\]"
+    r"(?=\s*\[\d+(?:\.\d+)?\]\s*\[S\d+\]|\s*$)", re.S)
 _SPEAKER_TAG_RE = re.compile(r"\[(S\d+)\]")
 
 
@@ -328,6 +338,8 @@ def _transcribe_chunk(groq_client, audio_bytes: bytes, filename: str, offset: fl
                 logging.info(f"[Whisper] {model} needs a language for timestamps — "
                              f"using '{fallback_language}' for auto-language videos from now on")
             break
+        except SoftTimeLimitExceeded:
+            raise  # out of time: let the task fail cleanly instead of trying more
         except Exception as e:
             msg = str(e)
             logging.warning(f"[Whisper] {model}: verbose_json {granularities} "
@@ -375,6 +387,8 @@ def _transcribe_chunk(groq_client, audio_bytes: bytes, filename: str, offset: fl
             WordTimestamp(word=t, start=round(i * dpw + offset, 3), end=round((i + 1) * dpw + offset, 3))
             for i, t in enumerate(tokens)
         ], ""
+    except SoftTimeLimitExceeded:
+        raise  # out of time: let the task fail cleanly instead of trying more
     except Exception as e:
         logging.warning(f"[Whisper] {model}: plain transcription failed: {str(e)[:200]}")
         return [], ""
@@ -432,19 +446,24 @@ def _transcribe(source_path: str, duration: float, language: str = "auto",
                         translating = True
                         logging.info(f"[Whisper] '{detected_lang}' speech — translating captions to English")
                         continue
+                    except SoftTimeLimitExceeded:
+                        raise  # out of time: let the task fail cleanly instead of trying more
                     except Exception as e:
                         logging.warning(f"[Whisper] translate failed, keeping source language: {str(e)[:120]}")
                 all_words.extend(words)
 
             # Deduplicate overlapping chunk boundaries
             if len(audio_chunks) > 1:
-                seen: set = set()
+                # A word heard by both overlapping chunks appears twice with (almost) the
+                # same start. Keying on the start alone also dropped short words that
+                # simply fell in the same 0.1 s bucket as their neighbour.
                 deduped: list[WordTimestamp] = []
                 for w in sorted(all_words, key=lambda x: x.start):
-                    k = round(w.start, 1)
-                    if k not in seen:
-                        deduped.append(w)
-                        seen.add(k)
+                    wk = re.sub(r"\W+", "", w.word.lower())
+                    if any(abs(p.start - w.start) < 0.3 and re.sub(r"\W+", "", p.word.lower()) == wk
+                           for p in deduped[-8:]):
+                        continue
+                    deduped.append(w)
                 all_words = deduped
 
             if not all_words and b["local"]:
@@ -460,6 +479,8 @@ def _transcribe(source_path: str, duration: float, language: str = "auto",
             logging.warning(f"[Whisper] {label} rate-limited — trying next key: {str(e)[:120]}")
             last_exc = e
             continue
+        except SoftTimeLimitExceeded:
+            raise  # out of time: let the task fail cleanly instead of trying more
         except Exception as e:
             logging.warning(f"[Whisper] {label} failed: {str(e)[:120]}")
             last_exc = e
@@ -609,6 +630,8 @@ def _audio_energy_signals(video_path: str, duration: float, top_n: int = 15) -> 
             }
             for ts, val in sorted(deduped, key=lambda x: x[0])
         ]
+    except SoftTimeLimitExceeded:
+        raise  # out of time: let the task fail cleanly instead of trying more
     except Exception as e:
         logging.warning("_audio_energy_signals failed: %s", e)
         return []

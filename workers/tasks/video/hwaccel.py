@@ -20,7 +20,7 @@ import os
 import subprocess
 import threading
 
-__all__ = ["pyav_encoder", "ffmpeg_encoder_args", "disable", "status"]
+__all__ = ["pyav_encoder", "ffmpeg_encoder_args", "disable", "status", "is_gpu_error"]
 
 log = logging.getLogger(__name__)
 _lock = threading.Lock()
@@ -107,6 +107,18 @@ def _check() -> dict:
         else:
             log.log(level, "[HW] encoding on the CPU: %s", _state["reason"])
         return _state
+
+
+_GPU_ERROR_HINTS = ("qsv", "mfx", "vpl", "vaapi", "libva", "/dev/dri", "hwaccel",
+                    "hardware", "device creation failed", "hw_frames", "hwupload")
+
+
+def is_gpu_error(exc: BaseException) -> bool:
+    """Does this failure come from the GPU encoder (vs. the source, a timeout, …)?"""
+    if type(exc).__name__ in ("SoftTimeLimitExceeded", "TimeLimitExceeded", "TimeoutExpired"):
+        return False
+    msg = str(exc).lower()
+    return any(h in msg for h in _GPU_ERROR_HINTS)
 
 
 def disable(reason: str) -> None:

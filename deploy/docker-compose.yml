@@ -598,10 +598,11 @@ services:
         max-size: 50m
         max-file: '3'
     command: celery -A workers.celery_app worker -Q viralo.video.pipeline --concurrency=2 --loglevel=info
-    # Intel GPU (Quick Sync) for encoding clips; remove these two lines if this
-    # machine has no /dev/dri. VIDEO_HWACCEL=off forces CPU encoding.
-    devices:
-    - /dev/dri:/dev/dri
+    # Intel GPU (Quick Sync) for encoding clips. Mounted with a device rule rather
+    # than `devices:` so the stack still starts on a machine without /dev/dri
+    # (encoding then falls back to the CPU). VIDEO_HWACCEL=off forces CPU encoding.
+    device_cgroup_rules:
+    - 'c 226:* rmw'
     mem_limit: 8g
     memswap_limit: 8g
     environment:
@@ -659,6 +660,7 @@ services:
       BGUTIL_POT_BASE_URL: http://bgutil-pot:4416
       MALLOC_ARENA_MAX: '2'
     volumes:
+    - /dev/dri:/dev/dri
     - video-temp:/tmp/viralo-video
     - video-storage:/tmp/viralo-storage
     - yt-cookies-live:/var/lib/yt
@@ -690,10 +692,11 @@ services:
         max-size: 50m
         max-file: '3'
     command: celery -A workers.celery_app worker -Q viralo.video.ai --concurrency=1 --loglevel=info
-    # Intel GPU (Quick Sync) for encoding clips; remove these two lines if this
-    # machine has no /dev/dri. VIDEO_HWACCEL=off forces CPU encoding.
-    devices:
-    - /dev/dri:/dev/dri
+    # Intel GPU (Quick Sync) for encoding clips. Mounted with a device rule rather
+    # than `devices:` so the stack still starts on a machine without /dev/dri
+    # (encoding then falls back to the CPU). VIDEO_HWACCEL=off forces CPU encoding.
+    device_cgroup_rules:
+    - 'c 226:* rmw'
     mem_limit: 8g
     memswap_limit: 8g
     environment:
@@ -751,6 +754,7 @@ services:
       BGUTIL_POT_BASE_URL: http://bgutil-pot:4416
       MALLOC_ARENA_MAX: '2'
     volumes:
+    - /dev/dri:/dev/dri
     - video-temp:/tmp/viralo-video
     - video-storage:/tmp/viralo-storage
     - yt-cookies-live:/var/lib/yt
@@ -869,10 +873,11 @@ services:
         max-size: 50m
         max-file: '3'
     command: celery -A workers.celery_app worker -Q viralo.video.generate --concurrency=1 --loglevel=info
-    # Intel GPU (Quick Sync) for encoding clips; remove these two lines if this
-    # machine has no /dev/dri. VIDEO_HWACCEL=off forces CPU encoding.
-    devices:
-    - /dev/dri:/dev/dri
+    # Intel GPU (Quick Sync) for encoding clips. Mounted with a device rule rather
+    # than `devices:` so the stack still starts on a machine without /dev/dri
+    # (encoding then falls back to the CPU). VIDEO_HWACCEL=off forces CPU encoding.
+    device_cgroup_rules:
+    - 'c 226:* rmw'
     mem_limit: 4g
     memswap_limit: 4g
     environment:
@@ -931,6 +936,7 @@ services:
       BGUTIL_POT_BASE_URL: http://bgutil-pot:4416
       MALLOC_ARENA_MAX: '2'
     volumes:
+    - /dev/dri:/dev/dri
     - video-temp:/tmp/viralo-video
     - video-storage:/tmp/viralo-storage
     - yt-cookies-live:/var/lib/yt
@@ -1134,6 +1140,8 @@ services:
         max-size: 50m
         max-file: '3'
     command: celery -A workers.celery_app worker -Q viralo.post.publish,viralo.analytics.ingest --concurrency=10 --loglevel=info
+    volumes:
+    - video-storage:/tmp/viralo-storage  # clip files, for publishing
     mem_limit: 512m
     memswap_limit: 512m
     depends_on:

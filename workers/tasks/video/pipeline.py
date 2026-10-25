@@ -485,9 +485,9 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
             _publish_progress(job_id, "transcribe", 37, "processing", "Generating video metadata from transcript...")
             vid_meta = _ai_generate_video_metadata(words, meta.duration, topic_focus) or {}
             if vid_meta:
-                if _game:
-                    vid_meta["game"] = _game  # metadata is replaced wholesale here
-                _update_video(tenant_id, video_id, metadata=json.dumps(vid_meta))
+                # Merge, don't replace: speakers, game, original_title and title_edited
+                # were already written to videos.metadata earlier in this run.
+                _merge_video_metadata(tenant_id, video_id, vid_meta)
                 _save_step_artifact(tenant_id, video_id, "video_metadata", vid_meta)
                 # Auto-detect language from metadata when user didn't set one explicitly
                 detected_lang = vid_meta.get("language_detected", "") or None
@@ -789,7 +789,10 @@ def _gvc_inner(self, tenant_id, video_id, job_id, cfg):
 
     if tr_row and tr_row.segments:
         segments = tr_row.segments if isinstance(tr_row.segments, list) else json.loads(tr_row.segments)
-        words = _segments_to_words(segments)
+        # Saved per-word timings and speakers when the transcript has them; older
+        # transcripts fall back to splitting each segment.
+        from workers.tasks.video._core import _load_transcript_words
+        words = _load_transcript_words(tenant_id, video_id) or _segments_to_words(segments)
         transcript_source = "db"
         _publish_progress(job_id, "transcribe", 20, "processing",
                           f"Loaded existing transcript ({len(words)} words)")

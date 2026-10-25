@@ -1,4 +1,4 @@
-# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): KEEP_SOURCE_VIDEOS.
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): KEEP_SOURCE_VIDEOS; unstick regenerating clips.
 """
 Video processing pipeline — ClipForge-based.
 PyAV for video I/O (no ffmpeg needed for clip export/audio).
@@ -119,16 +119,24 @@ def upload_clip_to_storage(self, clip_id: str, clip_path: str, tenant_id: str, j
     attempt = (self.request.retries or 0) + 1
     try:
         with _get_session(tenant_id) as session:
-            session.execute(
+            claimed = session.execute(
                 text("""
                     UPDATE clips
                        SET status = 'uploading',
                            upload_attempts = COALESCE(upload_attempts, 0) + 1,
                            updated_at = NOW()
-                     WHERE id = CAST(:cid AS uuid)
+                     WHERE id = CAST(:cid AS uuid) AND status <> 'deleted'
+                    RETURNING id
                 """),
                 {"cid": clip_id},
-            )
+            ).fetchone()
+        if claimed is None:
+            # The clip (or its project) was deleted while it rendered: don't write a
+            # file nothing points to.
+            logging.info("upload_clip_to_storage: clip %s no longer exists, discarding render", clip_id)
+            if clip_path:
+                Path(clip_path).unlink(missing_ok=True)
+            return
 
         storage_key = f"clips/{tenant_id}/{clip_id}.mp4"
 
@@ -1390,8 +1398,26 @@ def reconcile_stuck_videos(self) -> dict:
                         logging.warning("reconcile_stuck_videos: failed to enqueue webhook for video %s", vid)
     except Exception as e:
         logging.warning("reconcile_stuck_videos failed: %s", e)
-    if requeued or failed:
-        logging.info("reconcile_stuck_videos: requeued=%d failed=%d", requeued, failed)
+    # Clips left "regenerating" by a regenerate that was killed (hard time limit 4 h,
+    # worker restart/OOM): the API stamps updated_at when it queues one, so anything
+    # older than the limit is dead. Without this a stuck clip refuses every Regenerate.
+    unstuck = 0
+    try:
+        with Session(engine) as s:
+            unstuck = s.execute(text("""
+                UPDATE clips
+                   SET status = CASE WHEN COALESCE(storage_url, '') <> '' THEN 'ready' ELSE 'failed' END,
+                       metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+                           'regenerate_error',
+                           'Regenerate stopped unexpectedly (worker restarted or ran out of time). Try again.'),
+                       updated_at = NOW()
+                 WHERE status = 'regenerating' AND updated_at < NOW() - INTERVAL '250 minutes'
+            """)).rowcount or 0
+            s.commit()
+    except Exception as e:
+        logging.warning("reconcile_stuck_videos: clip reset failed: %s", e)
+    if requeued or failed or unstuck:
+        logging.info("reconcile_stuck_videos: requeued=%d failed=%d clips_unstuck=%d", requeued, failed, unstuck)
     return {"requeued": requeued, "failed": failed}
 
 

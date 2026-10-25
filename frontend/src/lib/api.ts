@@ -521,6 +521,8 @@ export const videoApi = {
   },
   mergeAiClips: (clipIds: string[]) =>
     videoReq<{ task_id: string; message: string }>("POST", "/clips/merge-ai", { clip_ids: clipIds }),
+  /** One clip's current state (used to follow a regenerate or upload). */
+  getClip: (clipId: string) => videoReq<ClipApiResponse>("GET", `/clips/${clipId}`),
   retryClipUpload: (clipId: string) =>
     videoReq<ClipApiResponse>("POST", `/clips/${clipId}/retry-upload`),
   /** "text" = new AI title/caption/tags, "render" = re-render, "both" = new text then re-render. */

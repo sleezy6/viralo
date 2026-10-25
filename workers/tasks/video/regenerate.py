@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import uuid
 from pathlib import Path
 
 from sqlalchemy import text
@@ -33,7 +34,9 @@ log = logging.getLogger(__name__)
 
 def _fetch_source(tenant_id: str, video_id: str, row, work_dir: Path, cfg: dict) -> str:
     """Source video for re-rendering: the stored original, else a fresh YouTube download."""
-    out = work_dir / "source_regen.mp4"
+    # Unique per task: two regenerates of the same video must not share (and delete)
+    # one source file.
+    out = work_dir / f"source_regen_{uuid.uuid4().hex[:8]}.mp4"
     if row.original_storage_key:
         import asyncio
         from shared.storage.base import get_storage
@@ -51,27 +54,38 @@ def _fetch_source(tenant_id: str, video_id: str, row, work_dir: Path, cfg: dict)
                 ) from e
     if row.source_type == "youtube_url" and row.source_url:
         from workers.tasks.video.download import _download_youtube
-        got = _download_youtube(row.source_url, str(out), quality=cfg.get("output_quality", "source"),
-                                tenant_id=tenant_id)
-        return got or str(out)
+        # _download_youtube returns the yt-dlp client that won ("tv", "web"…), not a path.
+        _download_youtube(row.source_url, str(out), quality=cfg.get("output_quality", "source"),
+                          tenant_id=tenant_id)
+        if not out.is_file() or out.stat().st_size == 0:
+            raise FileNotFoundError("Couldn't download the YouTube video again to re-render it")
+        return str(out)
     raise FileNotFoundError("The original video is no longer available to re-render from")
 
 
-def _set_status(tenant_id: str, clip_id: str, status: str, error: str | None = None) -> None:
+def _float_or_none(v) -> float | None:
+    try:
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _restore_status(tenant_id: str, clip_id: str, error: str, only_if_regenerating: bool = False) -> None:
+    """After a failed regenerate: the clip is usable again ("ready") if it still has a
+    video file, otherwise "failed" — never "ready" without a file. The error is shown
+    on the clip."""
     with _get_session(tenant_id) as session:
         session.execute(
-            text("""
+            text(f"""
                 UPDATE clips
-                   SET status = :st,
-                       metadata = CASE WHEN :err IS NULL
-                                       THEN COALESCE(metadata, '{}'::jsonb) - 'regenerate_error'
-                                       ELSE COALESCE(metadata, '{}'::jsonb)
-                                            || jsonb_build_object('regenerate_error', CAST(:err AS text))
-                                  END,
+                   SET status = CASE WHEN COALESCE(storage_url, '') <> '' THEN 'ready' ELSE 'failed' END,
+                       metadata = COALESCE(metadata, '{{}}'::jsonb)
+                                  || jsonb_build_object('regenerate_error', CAST(:err AS text)),
                        updated_at = NOW()
                  WHERE id = CAST(:cid AS uuid)
+                 {"AND status = 'regenerating'" if only_if_regenerating else ""}
             """),
-            {"cid": clip_id, "st": status, "err": error},
+            {"cid": clip_id, "err": error[:300]},
         )
 
 
@@ -253,6 +267,9 @@ def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
                     reason=cmeta.get("viral_reason", "") or "",
                     platform=row.platform or "tiktok",
                     hook_score=float(signals.get("hook_score") or 0.0),
+                    # keep the original scoring signals (they'd be overwritten with None)
+                    audio_energy=_float_or_none(signals.get("audio_energy")),
+                    speech_rate=_float_or_none(signals.get("speech_rate")),
                 )
                 applied = None  # editor edits being applied: {"range", "items"} in source seconds
                 if timing and isinstance(timing.get("captions"), list):
@@ -330,7 +347,10 @@ def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
                 results[cid] = "ok"
             except Exception as e:  # one bad clip must not stop the rest
                 log.exception("regenerate %s (%s) failed", cid, mode)
-                _set_status(tenant_id, cid, "ready", error=str(e)[:300])
+                _restore_status(tenant_id, cid, str(e))
+                from celery.exceptions import SoftTimeLimitExceeded
+                if isinstance(e, SoftTimeLimitExceeded):
+                    raise  # out of time: the task wrapper resets the clips not reached yet
                 results[cid] = str(e)[:300]
     finally:
         if source_path:
@@ -341,8 +361,20 @@ def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
     return results
 
 
-@celery_app.task(bind=True, name="workers.tasks.video.regenerate_clips",
+@celery_app.task(bind=True, name="workers.tasks.video.regenerate_clips", acks_late=True,
                  time_limit=4 * 3600, soft_time_limit=4 * 3600 - 120)
 def regenerate_clips(self, tenant_id: str, video_id: str, clip_ids: list[str], mode: str,
                      timing: dict | None = None) -> dict:
-    return _regenerate_clips(tenant_id, video_id, list(clip_ids), mode, timing)
+    try:
+        return _regenerate_clips(tenant_id, video_id, list(clip_ids), mode, timing)
+    except Exception as e:
+        # Failed before or between clips (missing video, DB error, out of time):
+        # don't leave the remaining clips "regenerating" — that refuses every retry.
+        msg = ("Regenerate ran out of time." if type(e).__name__ == "SoftTimeLimitExceeded"
+               else f"Regenerate failed: {str(e)[:200]}")
+        for cid in clip_ids:
+            try:
+                _restore_status(tenant_id, cid, msg, only_if_regenerating=True)
+            except Exception:
+                log.exception("could not reset clip %s after a failed regenerate", cid)
+        raise

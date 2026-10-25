@@ -574,7 +574,15 @@ export function ClipCard({ clip, idx, selected = false, onToggleSelect, isPosted
   const [upscaling,      setUpscaling]      = useState(false);
   const [localClip,      setLocalClip]      = useState(clip);
   // Pick up fresh data when the page reloads clips (e.g. while a regenerate runs).
-  useEffect(() => { setLocalClip(clip); }, [clip]);
+  // Just after this card queues a regenerate, a list poll that was already in flight can
+  // still carry the clip's old "ready" state; ignore that for a few seconds so the busy
+  // overlay doesn't flicker off.
+  const queuedAt = useRef(0);
+  useEffect(() => {
+    setLocalClip((cur) =>
+      CLIP_BUSY_STATUSES.includes(cur.status) && !CLIP_BUSY_STATUSES.includes(clip.status)
+        && Date.now() - queuedAt.current < 6000 ? cur : clip);
+  }, [clip]);
   const regenerating = CLIP_BUSY_STATUSES.includes(localClip.status);
   const regenError = localClip.clip_metadata?.regenerate_error;
 
@@ -663,7 +671,7 @@ export function ClipCard({ clip, idx, selected = false, onToggleSelect, isPosted
           sourceDuration={sourceDuration}
           onClose={() => setShowRegen(false)}
           onQueued={({ clip: updated }) => {
-            if (updated) setLocalClip(updated);
+            if (updated) { queuedAt.current = Date.now(); setLocalClip(updated); }
             onRegenerated?.();
           }}
         />
@@ -674,7 +682,7 @@ export function ClipCard({ clip, idx, selected = false, onToggleSelect, isPosted
           clip={localClip}
           onClose={() => setShowEditor(false)}
           onPost={() => setShowPublish(true)}
-          onApplied={(updated) => { setLocalClip(updated); onRegenerated?.(); }}
+          onApplied={(updated) => { queuedAt.current = Date.now(); setLocalClip(updated); onRegenerated?.(); }}
         />
       )}
 

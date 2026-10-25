@@ -101,4 +101,32 @@ describe("RegenerateDialog", () => {
     await flush();
     expect(regenerateClip).toHaveBeenCalledWith("c1", "text", undefined);
   });
+
+  it("lets you type an end time; it's checked when you leave the field", async () => {
+    const timed = { ...clip, start_ms: 30_000, end_ms: 40_000 } as ClipApiResponse;
+    act(() => root.render(<RegenerateDialog videoId="v1" clip={timed} totalClips={1} sourceDuration={300}
+      onClose={() => {}} onQueued={() => {}} />));
+    const end = host.querySelector<HTMLInputElement>('input[aria-label="End (seconds)"]')!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    act(() => { setter.call(end, ""); end.dispatchEvent(new Event("input", { bubbles: true })); });
+    for (const key of ["4", "5"]) {   // typed key by key onto what the field shows
+      act(() => { setter.call(end, end.value + key); end.dispatchEvent(new Event("input", { bubbles: true })); });
+    }
+    expect(end.value).toBe("45");
+    act(() => { end.dispatchEvent(new FocusEvent("focusout", { bubbles: true })); });
+    click("Regenerate clip");
+    await flush();
+    expect(regenerateClip).toHaveBeenCalledWith("c1", "both", { start_sec: 30, end_sec: 45 });
+  });
+
+  it("caps a typed end at 10 minutes of clip and at the video's end", async () => {
+    const timed = { ...clip, start_ms: 30_000, end_ms: 40_000 } as ClipApiResponse;
+    act(() => root.render(<RegenerateDialog videoId="v1" clip={timed} totalClips={1} sourceDuration={5000}
+      onClose={() => {}} onQueued={() => {}} />));
+    const end = host.querySelector<HTMLInputElement>('input[aria-label="End (seconds)"]')!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    act(() => { setter.call(end, "2000"); end.dispatchEvent(new Event("input", { bubbles: true })); });
+    act(() => { end.dispatchEvent(new FocusEvent("focusout", { bubbles: true })); });
+    expect(end.value).toBe("630");   // 30 s start + 600 s maximum
+  });
 });

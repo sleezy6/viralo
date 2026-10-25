@@ -48,4 +48,21 @@ describe("GameField", () => {
     expect(searchGames).not.toHaveBeenCalled();
     expect(onChange).toHaveBeenLastCalledWith({ game: "E", game_appid: null });
   });
+
+  it("Escape closes the suggestions without reaching the dialog around it", async () => {
+    const dialogEscape = vi.fn();
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") dialogEscape(); };
+    window.addEventListener("keydown", onKey);
+    act(() => root.render(<GameField game="" appid={null} onChange={() => {}} inputCls="" labelCls="" />));
+    type("backrooms");
+    await sleep(400);
+    expect(host.querySelector('[role="listbox"]')).not.toBeNull();
+    const input = host.querySelector("input")!;
+    act(() => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    expect(host.querySelector('[role="listbox"]')).toBeNull();
+    expect(dialogEscape).not.toHaveBeenCalled();
+    act(() => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    expect(dialogEscape).toHaveBeenCalledTimes(1);   // list closed: Escape goes to the dialog
+    window.removeEventListener("keydown", onKey);
+  });
 });
