@@ -22,4 +22,7 @@ COPY workers/ ./workers/
 COPY services/workflow/ ./services/workflow/
 RUN uv pip install --system -e ./shared -e ./services/workflow
 ENV PYTHONPATH=/app
-CMD ["uvicorn", "workflow.main:app", "--host", "0.0.0.0", "--port", "8005", "--workers", "2"]
+# Don't wait forever for open live streams (notifications/progress) on shutdown;
+# they reconnect to the new container. Without this, updates hung for the full
+# stop timeout (sleezy6 fork).
+CMD ["uvicorn", "workflow.main:app", "--host", "0.0.0.0", "--port", "8005", "--workers", "2", "--timeout-graceful-shutdown", "10"]

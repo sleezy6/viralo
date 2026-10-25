@@ -39,4 +39,7 @@ COPY workers/ ./workers/
 COPY services/video/ ./services/video/
 RUN uv pip install --system -e ./shared -e ./services/video
 ENV PYTHONPATH=/app
-CMD ["uvicorn", "video.main:app", "--host", "0.0.0.0", "--port", "8003", "--workers", "2"]
+# Don't wait forever for open live streams (notifications/progress) on shutdown;
+# they reconnect to the new container. Without this, updates hung for the full
+# stop timeout (sleezy6 fork).
+CMD ["uvicorn", "video.main:app", "--host", "0.0.0.0", "--port", "8003", "--workers", "2", "--timeout-graceful-shutdown", "10"]

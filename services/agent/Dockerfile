@@ -22,4 +22,7 @@ COPY workers/ ./workers/
 COPY services/agent/ ./services/agent/
 RUN uv pip install --system -e ./shared -e ./services/agent
 ENV PYTHONPATH=/app
-CMD ["uvicorn", "agent.main:app", "--host", "0.0.0.0", "--port", "8004", "--workers", "2"]
+# Don't wait forever for open live streams (notifications/progress) on shutdown;
+# they reconnect to the new container. Without this, updates hung for the full
+# stop timeout (sleezy6 fork).
+CMD ["uvicorn", "agent.main:app", "--host", "0.0.0.0", "--port", "8004", "--workers", "2", "--timeout-graceful-shutdown", "10"]

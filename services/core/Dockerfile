@@ -32,4 +32,7 @@ COPY services/mcp/ ./services/mcp/
 COPY scripts/ ./scripts/
 RUN uv pip install --system -e ./shared -e ./services/core -e ./services/mcp
 ENV PYTHONPATH=/app
-CMD ["uvicorn", "core.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2"]
+# Don't wait forever for open live streams (notifications/progress) on shutdown;
+# they reconnect to the new container. Without this, updates hung for the full
+# stop timeout (sleezy6 fork).
+CMD ["uvicorn", "core.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2", "--timeout-graceful-shutdown", "10"]
