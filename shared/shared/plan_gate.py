@@ -1,3 +1,4 @@
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): storage counter can decrease.
 from __future__ import annotations
 
 import os
@@ -224,7 +225,8 @@ async def increment_storage_used(
     tenant_id: uuid.UUID,
     bytes_added: int,
 ) -> None:
-    """Add bytes_added to tenant's storage_bytes_used. Creates quota row if absent."""
+    """Add bytes_added (negative to subtract) to tenant's storage_bytes_used, never
+    below zero. Creates quota row if absent."""
     from shared.models.public.usage_quota import UsageQuota  # noqa: PLC0415
 
     quota_result = await db.execute(
@@ -232,9 +234,9 @@ async def increment_storage_used(
     )
     quota = quota_result.scalar_one_or_none()
     if quota:
-        quota.storage_bytes_used = (quota.storage_bytes_used or 0) + bytes_added
+        quota.storage_bytes_used = max(0, (quota.storage_bytes_used or 0) + bytes_added)
     else:
-        db.add(UsageQuota(tenant_id=tenant_id, storage_bytes_used=bytes_added))
+        db.add(UsageQuota(tenant_id=tenant_id, storage_bytes_used=max(0, bytes_added)))
     await db.commit()
 
 

@@ -985,6 +985,7 @@ async def delete_video(
     video_id: uuid.UUID,
     token: TokenPayload = Depends(get_current_user),
     db: AsyncSession = Depends(get_tenant_db),
+    pub_db: AsyncSession = Depends(get_db_no_rls),
 ):
     import shutil
 
@@ -1021,11 +1022,23 @@ async def delete_video(
     # (KEEP_SOURCE_VIDEOS) so clips can be re-rendered; deleting the project is when
     # it goes, otherwise it would stay on disk forever.
     if video.original_storage_key:
+        freed = 0
+        if os.getenv("STORAGE_PROVIDER", "local") == "local":
+            rel = video.original_storage_key.removeprefix("/storage/").lstrip("/")
+            orig = (storage_root / rel).resolve()
+            if storage_root.resolve() in orig.parents and orig.is_file():
+                freed = orig.stat().st_size
         try:
             from shared.storage.base import get_storage
             await get_storage(os.getenv("STORAGE_PROVIDER", "local")).delete(video.original_storage_key)
         except Exception:
-            pass  # already gone (older installs deleted it after processing)
+            freed = 0  # already gone (older installs deleted it after processing)
+        if freed:
+            # The "Cloud Storage" counter counts uploaded originals; it only ever went up.
+            try:
+                await increment_storage_used(pub_db, uuid.UUID(token.tenant_id), -freed)
+            except Exception:
+                pass
 
     # Delete source/temp files
     temp_dir = Path(os.getenv("VIDEO_TEMP_DIR", "/tmp/viralo-video")) / str(video_id)
