@@ -12,7 +12,7 @@ Also resets each account's "Cloud Storage" counter (usage_quotas.storage_bytes_u
 which only ever went up) to the size of its uploaded originals still on disk.
 
 Safety: only known Viralo folders are touched, files changed in the last hour are
-skipped, and it refuses to run if the database shows no projects while files exist.
+skipped, and it refuses to run if the database doesn't know the accounts owning the files.
 """
 import os
 import re
@@ -89,9 +89,17 @@ def main(argv: list[str]) -> int:
     tenants, videos, clips = _live_ids(engine)
 
     files = [p for p in ROOT.rglob("*") if p.is_file()]
-    if not videos and any(p.relative_to(ROOT).parts[:1] == ("originals",) for p in files):
-        print("Refusing to run: the database shows no projects, but uploaded originals exist.\n"
-              "That usually means it's connected to the wrong database. Nothing was deleted.")
+    # Wrong-database guard: stored files sit in folders named after the account that
+    # owns them. If the database knows none of those accounts, it isn't this install's
+    # database, and everything would look like a leftover. (Having no projects is fine:
+    # that's the normal state after deleting them all.)
+    owners = {p.relative_to(ROOT).parts[1] for p in files
+              if len(p.relative_to(ROOT).parts) >= 3
+              and p.relative_to(ROOT).parts[0] in ("originals", "clips", "renders", "previews")
+              and _UUID.fullmatch(p.relative_to(ROOT).parts[1])}
+    if owners and not (owners & tenants):
+        print("Refusing to run: none of the accounts that own the stored files exist in this\n"
+              "database, so it's probably connected to the wrong one. Nothing was deleted.")
         return 3
 
     now = time.time()
