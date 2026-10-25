@@ -1,3 +1,4 @@
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): editor preview poster, preload and load errors.
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
@@ -235,6 +236,7 @@ export function VideoEditor({
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "ok" | "err">("idle");
   const [noVideo] = useState(!clip.storage_url);
+  const [videoError, setVideoError] = useState("");
   const [speed, setSpeed] = useState<Speed>(1);
   const [muted, setMuted] = useState(false);
   const [loop, setLoop] = useState(false);
@@ -530,9 +532,16 @@ export function VideoEditor({
                 <video
                   ref={videoRef}
                   src={clip.storage_url}
+                  // Poster: never a blank black box while the video loads (the card does the same).
+                  poster={clip.thumbnail_url ?? undefined}
                   crossOrigin="anonymous"
                   playsInline
-                  preload="metadata"
+                  preload="auto"
+                  onError={(e) => {
+                    const err = (e.target as HTMLVideoElement).error;
+                    setVideoError(err?.message || `Video failed to load (code ${err?.code ?? "?"})`);
+                  }}
+                  onLoadedData={() => setVideoError("")}
                   className="absolute inset-0 h-full w-full object-cover pointer-events-none"
                   onTimeUpdate={(e) => setCurrentTime((e.target as HTMLVideoElement).currentTime)}
                   onEnded={() => setPlaying(false)}
@@ -549,6 +558,11 @@ export function VideoEditor({
                 />
               )}
               <canvas ref={canvasRef} width={360} height={640} className="absolute inset-0 h-full w-full" />
+              {videoError && (
+                <div role="alert" className="absolute inset-x-3 top-3 rounded-lg bg-black/75 px-3 py-2 text-center text-[11px] leading-snug text-red-300">
+                  Couldn't play this clip: {videoError}
+                </div>
+              )}
 
               {/* Current time overlay */}
               <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/60 backdrop-blur-sm px-3 py-1 font-mono text-[11px] text-white/80 pointer-events-none">
