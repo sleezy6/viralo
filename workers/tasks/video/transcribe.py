@@ -1,6 +1,7 @@
 # Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): optional
 # self-hosted Whisper backend (LOCAL_STT_*) tried before Groq; segment-only and
-# no-timestamp servers handled with better timing estimates and logging.
+# no-timestamp servers handled with better timing estimates and logging;
+# LOCAL_STT_LANGUAGE for servers that require a language for timestamps.
 """
 Video processing pipeline — ClipForge-based.
 PyAV for video I/O (no ffmpeg needed for clip export/audio).
@@ -210,29 +211,41 @@ def _translate_chunk(groq_client, audio_bytes: bytes, filename: str, offset: flo
 
 def _transcribe_chunk(groq_client, audio_bytes: bytes, filename: str, offset: float, language: str,
                       model: str = GROQ_WHISPER_MODEL,
-                      chunk_dur: float | None = None) -> tuple[list[WordTimestamp], str]:
+                      chunk_dur: float | None = None,
+                      fallback_language: str | None = None) -> tuple[list[WordTimestamp], str]:
     """Returns (words, detected_language). detected_language is ISO 639-1 or empty string.
 
     Timing sources, best first: per-word timestamps → segment timestamps split across
     their words → (last resort) words spread evenly over the chunk's real length."""
     lang = language if language != "auto" else None
     response = None
+    used_lang = lang
     # Some servers only do segment timings (e.g. diarization models) and either ignore
     # or reject the word request, so fall back to segment-only before giving up timing.
-    for granularities in (["word", "segment"], ["segment"]):
+    # Some also refuse timestamped output unless told the language (models that don't
+    # detect it, e.g. MOSS via Unsloth), so retry those with the configured fallback.
+    attempts = [(lang, g) for g in (["word", "segment"], ["segment"])]
+    for try_lang, granularities in attempts:
         try:
             response = groq_client.audio.transcriptions.create(
                 file=(filename, audio_bytes),
                 model=model,
-                language=lang,
+                language=try_lang,
                 response_format="verbose_json",
                 timestamp_granularities=granularities,
             )
+            used_lang = try_lang
             break
         except Exception as e:
-            logging.warning(f"[Whisper] {model}: verbose_json {granularities} failed: {str(e)[:200]}")
+            msg = str(e)
+            logging.warning(f"[Whisper] {model}: verbose_json {granularities} "
+                            f"(language={try_lang or 'auto'}) failed: {msg[:200]}")
+            if (try_lang is None and fallback_language and "language" in msg.lower()
+                    and (fallback_language, granularities) not in attempts):
+                attempts.append((fallback_language, granularities))
     if response is not None:
-        detected_lang = getattr(response, "language", "") or ""
+        # A model that can't detect language reports none; the language we sent is the answer.
+        detected_lang = getattr(response, "language", "") or (used_lang or "")
         has_words = bool(getattr(response, "words", None)) or any(
             _get_attr(seg, "words") for seg in (getattr(response, "segments", None) or []))
         words = _parse_words(response, offset)
@@ -304,7 +317,8 @@ def _transcribe(source_path: str, duration: float, language: str = "auto",
                     continue
                 next_off = audio_chunks[i + 1][1] if i + 1 < len(audio_chunks) else duration
                 words, chunk_lang = _transcribe_chunk(client, audio_bytes, fname, offset, language,
-                                                      b["model"], chunk_dur=max(next_off - offset, 0.0))
+                                                      b["model"], chunk_dur=max(next_off - offset, 0.0),
+                                                      fallback_language=b.get("fallback_language"))
                 # Use first chunk's detected language (most reliable — full audio context)
                 if not detected_lang and chunk_lang:
                     detected_lang = chunk_lang
@@ -378,6 +392,8 @@ def _stt_backends() -> list[dict]:
                              timeout=timeout, max_retries=0),
             "model": model,
             "translate_model": model,
+            # Used only when the server refuses timestamps without a language.
+            "fallback_language": os.getenv("LOCAL_STT_LANGUAGE", "en").strip() or None,
             "local": True,
         })
 

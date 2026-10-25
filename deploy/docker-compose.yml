@@ -8,7 +8,8 @@
 # AI — pick one or both:
 #   Self-hosted (e.g. Unsloth `unsloth run`): LOCAL_LLM_BASE_URL (http://<pc-ip>:<port>),
 #     LOCAL_LLM_API_KEY, LOCAL_LLM_MODEL (an id from /v1/models). Optional local
-#     speech-to-text: LOCAL_STT_BASE_URL, LOCAL_STT_MODEL (+ LOCAL_STT_API_KEY).
+#     speech-to-text: LOCAL_STT_BASE_URL, LOCAL_STT_MODEL (+ LOCAL_STT_API_KEY,
+#     LOCAL_STT_LANGUAGE for models that do not detect language, default en).
 #   Hosted free tiers: GROQ_API_KEY (also does transcription), OPENROUTER_API_KEY, ...
 #
 # Optional: FRONTEND_URL (e.g. http://192.168.1.50:3000), VIRALO_PORT (default 3000).
@@ -155,6 +156,7 @@ services:
       LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
       LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
+      LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
   gateway:
     image: ghcr.io/sleezy6/viralo-gateway:latest
     restart: unless-stopped
@@ -235,6 +237,7 @@ services:
       LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
       LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
+      LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
   video-service:
     image: ghcr.io/sleezy6/viralo-video:latest
     networks:
@@ -292,6 +295,7 @@ services:
       LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
       LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
+      LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
       YTDLP_COOKIES_FILE: ''
       YTDLP_PROXY: ${YTDLP_PROXY:-}
       YTDLP_PROXY_LIST: ${YTDLP_PROXY_LIST:-}
@@ -387,6 +391,7 @@ services:
       LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
       LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
+      LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
   workflow-service:
     image: ghcr.io/sleezy6/viralo-workflow:latest
     networks:
@@ -459,6 +464,7 @@ services:
       LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
       LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
+      LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
   platform-service:
     image: ghcr.io/sleezy6/viralo-platform:latest
     networks:
@@ -531,6 +537,7 @@ services:
       LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
       LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
+      LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
   bgutil-pot:
     image: brainicism/bgutil-ytdlp-pot-provider:1.3.1
     restart: unless-stopped
@@ -606,6 +613,7 @@ services:
       LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
       LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
+      LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
       YTDLP_COOKIES_FILE: ''
       YTDLP_PROXY: ${YTDLP_PROXY:-}
       YTDLP_PROXY_LIST: ${YTDLP_PROXY_LIST:-}
@@ -688,6 +696,7 @@ services:
       LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
       LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
+      LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
       YTDLP_COOKIES_FILE: ''
       YTDLP_PROXY: ${YTDLP_PROXY:-}
       YTDLP_PROXY_LIST: ${YTDLP_PROXY_LIST:-}
@@ -770,6 +779,7 @@ services:
       LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
       LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
+      LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
       YTDLP_COOKIES_FILE: ''
       YTDLP_PROXY: ${YTDLP_PROXY:-}
       YTDLP_PROXY_LIST: ${YTDLP_PROXY_LIST:-}
@@ -852,6 +862,7 @@ services:
       LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
       LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
+      LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
       YTDLP_COOKIES_FILE: ''
       YTDLP_PROXY: ${YTDLP_PROXY:-}
       YTDLP_PROXY_LIST: ${YTDLP_PROXY_LIST:-}
@@ -958,6 +969,7 @@ services:
       LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
       LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
+      LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
   celery-workflow:
     image: ghcr.io/sleezy6/viralo-workflow:latest
     networks:
@@ -1039,6 +1051,7 @@ services:
       LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
       LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
+      LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
   celery-post:
     image: ghcr.io/sleezy6/viralo-platform:latest
     networks:
@@ -1120,6 +1133,7 @@ services:
       LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
       LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
+      LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
   celery-notification:
     image: ghcr.io/sleezy6/viralo-platform:latest
     networks:
@@ -1201,6 +1215,7 @@ services:
       LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
       LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
+      LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
   celery-beat:
     image: ghcr.io/sleezy6/viralo-core:latest
     networks:
@@ -1283,6 +1298,7 @@ services:
       LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-300}
       LOCAL_LLM_JSON_MODE: ${LOCAL_LLM_JSON_MODE:-false}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
+      LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
 networks:
   viralo-internal:
     driver: bridge
