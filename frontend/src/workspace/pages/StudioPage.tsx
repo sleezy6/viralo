@@ -1,3 +1,4 @@
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): Game field in the upload and YouTube setup.
 import { useState, useRef, useCallback, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
@@ -6,6 +7,7 @@ import { navigate } from "@/lib/router";
 import { videoApi, platformApi, type VideoResponse, type SocialAccount } from "@/lib/api";
 import { CAPTION_STYLES, buildStudioModalClipConfig, type CaptionStyleOption } from "./upload/constants";
 import { ClipCaptionToggles } from "./upload/ClipConfig";
+import { GameField } from "./upload/GameField";
 
 // ── YouTube Import Modal ──────────────────────────────────────────────────────
 
@@ -228,6 +230,7 @@ export function YoutubeImportModal({ onClose, initialUrl = "", prefetched = null
   const [tab, setTab]             = useState<typeof TEMPLATE_TABS[number]>("9:16 template");
   const [template, setTemplate]   = useState<string>("tiktok");
   const [addCaptions, setAddCaptions] = useState(true);
+  const [game, setGame] = useState<{ game: string | null; game_appid: number | null }>({ game: null, game_appid: null });
   const [skipCaption, setSkipCaption] = useState(false);
   const [feat, setFeat]           = useState({ emoji: true, highlight: true, silences: false, brolls: false });
   const [findMoment, setFindMoment] = useState("");
@@ -347,13 +350,13 @@ export function YoutubeImportModal({ onClose, initialUrl = "", prefetched = null
           },
         } : {}),
       });
-      const video = await videoApi.youtube(urlVal.trim(), undefined, cfg);
+      const video = await videoApi.youtube(urlVal.trim(), undefined, { ...cfg, ...game });
       navigate(`/projects/${video.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Import failed");
       setUploading(false);
     }
-  }, [urlVal, urlReady, ratio, clipLen, clipCount, template, findMoment, addCaptions, skipCaption, autoSchedule, pubAccountIds, pubPerDay, pubIntervalHours, pubStartAt]);
+  }, [urlVal, urlReady, ratio, clipLen, clipCount, template, findMoment, addCaptions, skipCaption, game, autoSchedule, pubAccountIds, pubPerDay, pubIntervalHours, pubStartAt]);
 
   const selectClass = "flex h-[50px] items-center gap-2 rounded-[12px] border border-c-border bg-surface-2 px-3.5 transition focus-within:border-[#ff3d6a]/50";
 
@@ -473,6 +476,22 @@ export function YoutubeImportModal({ onClose, initialUrl = "", prefetched = null
                   onSkipCaptionChange={setSkipCaption}
                 />
               </div>
+
+              <GameField
+
+                game={game.game}
+
+                appid={game.game_appid}
+
+                onChange={setGame}
+
+                className="mb-4"
+
+                labelCls="mb-2 block text-[11px] font-bold uppercase tracking-wide text-c-text-muted"
+
+                inputCls="h-[46px] w-full rounded-[12px] border border-c-border bg-surface-2 px-3.5 text-[13px] text-c-text outline-none transition placeholder:text-c-text-muted focus:border-[#ff3d6a]/50"
+
+              />
 
               {/* ── Template tabs ── */}
               <div className="mb-3 flex items-center gap-1 border-b border-c-border">
@@ -659,6 +678,7 @@ function UploadConfigModal({ file, onClose }: UploadModalProps) {
   const [tab, setTab]             = useState<typeof TEMPLATE_TABS[number]>("9:16 template");
   const [template, setTemplate]   = useState<string>("tiktok");
   const [addCaptions, setAddCaptions] = useState(true);
+  const [game, setGame] = useState<{ game: string | null; game_appid: number | null }>({ game: null, game_appid: null });
   const [skipCaption, setSkipCaption] = useState(false);
   const [feat, setFeat]           = useState({ emoji: true, highlight: true, silences: false, brolls: false });
   const [findMoment, setFindMoment] = useState("");
@@ -737,13 +757,13 @@ function UploadConfigModal({ file, onClose }: UploadModalProps) {
           },
         } : {}),
       });
-      const video = await videoApi.upload(file, file.name.replace(/\.[^.]+$/, ""), cfg);
+      const video = await videoApi.upload(file, file.name.replace(/\.[^.]+$/, ""), { ...cfg, ...game });
       navigate(`/projects/${video.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
       setUploading(false);
     }
-  }, [file, ratio, clipLen, clipCount, template, findMoment, addCaptions, skipCaption, autoSchedule, pubAccountIds, pubPerDay, pubIntervalHours, pubStartAt]);
+  }, [file, ratio, clipLen, clipCount, template, findMoment, addCaptions, skipCaption, game, autoSchedule, pubAccountIds, pubPerDay, pubIntervalHours, pubStartAt]);
 
   const selectClass = "flex h-[50px] items-center gap-2 rounded-[12px] border border-c-border bg-surface-2 px-3.5 transition focus-within:border-[#ff3d6a]/50";
 
@@ -814,6 +834,22 @@ function UploadConfigModal({ file, onClose }: UploadModalProps) {
               onSkipCaptionChange={setSkipCaption}
             />
           </div>
+
+          <GameField
+
+            game={game.game}
+
+            appid={game.game_appid}
+
+            onChange={setGame}
+
+            className="mb-4"
+
+            labelCls="mb-2 block text-[11px] font-bold uppercase tracking-wide text-c-text-muted"
+
+            inputCls="h-[46px] w-full rounded-[12px] border border-c-border bg-surface-2 px-3.5 text-[13px] text-c-text outline-none transition placeholder:text-c-text-muted focus:border-[#ff3d6a]/50"
+
+          />
 
           {/* ── Template tabs ── */}
           <div className="mb-3 flex items-center gap-1 border-b border-c-border">

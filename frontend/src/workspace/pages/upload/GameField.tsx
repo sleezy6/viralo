@@ -14,12 +14,14 @@ export function GameField({
   onChange,
   inputCls,
   labelCls,
+  className = "mt-4",
 }: {
   game: string | null | undefined;
   appid: number | null | undefined;
   onChange: (patch: { game: string | null; game_appid: number | null }) => void;
   inputCls: string;
   labelCls: string;
+  className?: string;
 }) {
   const [text, setText] = useState(game ?? "");
   const [items, setItems] = useState<SteamGameSuggestion[]>([]);
@@ -58,7 +60,7 @@ export function GameField({
   };
 
   return (
-    <div ref={boxRef} className="relative mt-4">
+    <div ref={boxRef} className={cn("relative", className)}>
       <label htmlFor="game-field" className={labelCls}>
         Game <span className="normal-case tracking-normal text-c-text-muted">optional</span>
       </label>
