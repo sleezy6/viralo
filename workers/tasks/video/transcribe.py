@@ -1,5 +1,6 @@
 # Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): optional
-# self-hosted Whisper backend (LOCAL_STT_*) tried before Groq.
+# self-hosted Whisper backend (LOCAL_STT_*) tried before Groq; segment-only and
+# no-timestamp servers handled with better timing estimates and logging.
 """
 Video processing pipeline — ClipForge-based.
 PyAV for video I/O (no ffmpeg needed for clip export/audio).
@@ -118,6 +119,23 @@ def _get_attr(obj, key, default=None):
     return getattr(obj, key, default)
 
 
+_ASR_TAG_RE = re.compile(r"\[[^\]]*\]|<\|[^|]*\|>")
+
+
+def _strip_asr_tags(text: str) -> str:
+    """Drop inline markup some ASR models leave in segment text: speaker labels
+    ([S01]), inline timestamps ([0.48]), event tags ([laughter], <|music|>)."""
+    return " ".join(_ASR_TAG_RE.sub(" ", text).split())
+
+
+def _pause_weight(token: str) -> int:
+    if token.endswith((".", "!", "?", "…")):
+        return 6
+    if token.endswith((",", ";", ":", "—")):
+        return 3
+    return 0
+
+
 def _parse_words(response, offset: float) -> list[WordTimestamp]:
     words = []
     # 1. Top-level response.words
@@ -153,14 +171,16 @@ def _parse_words(response, offset: float) -> list[WordTimestamp]:
     # causing captions to fall behind on long words and run ahead on short ones.
     # Weighting by character count tracks phoneme count better.
     for seg in (getattr(response, "segments", None) or []):
-        seg_text = (_get_attr(seg, "text") or "").strip()
+        seg_text = _strip_asr_tags(_get_attr(seg, "text") or "")
         seg_start = float(_get_attr(seg, "start") or 0)
         seg_end = float(_get_attr(seg, "end") or 0)
         tokens = seg_text.split()
         if not tokens:
             continue
         seg_dur = max(seg_end - seg_start, 0.01)
-        char_counts = [max(len(t), 1) for t in tokens]
+        # Speech pauses at punctuation; weighting it keeps long segments (e.g. a
+        # diarization model's whole speaker turn) from drifting as far.
+        char_counts = [max(len(t), 1) + _pause_weight(t) for t in tokens]
         total_chars = sum(char_counts)
         t = seg_start
         for token, chars in zip(tokens, char_counts):
@@ -189,38 +209,62 @@ def _translate_chunk(groq_client, audio_bytes: bytes, filename: str, offset: flo
 
 
 def _transcribe_chunk(groq_client, audio_bytes: bytes, filename: str, offset: float, language: str,
-                      model: str = GROQ_WHISPER_MODEL) -> tuple[list[WordTimestamp], str]:
-    """Returns (words, detected_language). detected_language is ISO 639-1 or empty string."""
-    detected_lang = ""
-    try:
-        response = groq_client.audio.transcriptions.create(
-            file=(filename, audio_bytes),
-            model=model,
-            language=language if language != "auto" else None,
-            response_format="verbose_json",
-            timestamp_granularities=["word", "segment"],
-        )
-        detected_lang = getattr(response, "language", "") or ""
-    except Exception:
+                      model: str = GROQ_WHISPER_MODEL,
+                      chunk_dur: float | None = None) -> tuple[list[WordTimestamp], str]:
+    """Returns (words, detected_language). detected_language is ISO 639-1 or empty string.
+
+    Timing sources, best first: per-word timestamps → segment timestamps split across
+    their words → (last resort) words spread evenly over the chunk's real length."""
+    lang = language if language != "auto" else None
+    response = None
+    # Some servers only do segment timings (e.g. diarization models) and either ignore
+    # or reject the word request, so fall back to segment-only before giving up timing.
+    for granularities in (["word", "segment"], ["segment"]):
         try:
             response = groq_client.audio.transcriptions.create(
                 file=(filename, audio_bytes),
                 model=model,
-                language=language if language != "auto" else None,
-                response_format="json",
+                language=lang,
+                response_format="verbose_json",
+                timestamp_granularities=granularities,
             )
-            text_val = (getattr(response, "text", "") or "").strip()
-            if not text_val:
-                return [], ""
-            tokens = text_val.split()
-            dpw = max(0.3, 30.0 / max(len(tokens), 1))
-            return [
-                WordTimestamp(word=t, start=round(i * dpw + offset, 3), end=round((i + 1) * dpw + offset, 3))
-                for i, t in enumerate(tokens)
-            ], ""
-        except Exception:
+            break
+        except Exception as e:
+            logging.warning(f"[Whisper] {model}: verbose_json {granularities} failed: {str(e)[:200]}")
+    if response is not None:
+        detected_lang = getattr(response, "language", "") or ""
+        has_words = bool(getattr(response, "words", None)) or any(
+            _get_attr(seg, "words") for seg in (getattr(response, "segments", None) or []))
+        words = _parse_words(response, offset)
+        if words:
+            logging.info(f"[Whisper] {model}: {len(words)} words, timing from "
+                         f"{'word timestamps' if has_words else 'segment timestamps (estimated per word)'}")
+            return words, detected_lang
+        logging.warning(f"[Whisper] {model}: verbose_json response had no words or segments")
+
+    try:
+        response = groq_client.audio.transcriptions.create(
+            file=(filename, audio_bytes),
+            model=model,
+            language=lang,
+            response_format="json",
+        )
+        text_val = _strip_asr_tags(getattr(response, "text", "") or "")
+        if not text_val:
             return [], ""
-    return _parse_words(response, offset), detected_lang
+        tokens = text_val.split()
+        # No timestamps at all: spread over the chunk's actual length (not a fixed 30s),
+        # so at least the captions span the right stretch of video.
+        span = chunk_dur if chunk_dur and chunk_dur > 0 else 30.0
+        dpw = span / max(len(tokens), 1)
+        logging.warning(f"[Whisper] {model}: no timestamps returned — caption timing is a rough estimate")
+        return [
+            WordTimestamp(word=t, start=round(i * dpw + offset, 3), end=round((i + 1) * dpw + offset, 3))
+            for i, t in enumerate(tokens)
+        ], ""
+    except Exception as e:
+        logging.warning(f"[Whisper] {model}: plain transcription failed: {str(e)[:200]}")
+        return [], ""
 
 
 _ENGLISH_LANGS = {"en", "english"}
@@ -258,7 +302,9 @@ def _transcribe(source_path: str, duration: float, language: str = "auto",
                 if translating:
                     all_words.extend(_translate_chunk(client, audio_bytes, fname, offset, b["translate_model"]))
                     continue
-                words, chunk_lang = _transcribe_chunk(client, audio_bytes, fname, offset, language, b["model"])
+                next_off = audio_chunks[i + 1][1] if i + 1 < len(audio_chunks) else duration
+                words, chunk_lang = _transcribe_chunk(client, audio_bytes, fname, offset, language,
+                                                      b["model"], chunk_dur=max(next_off - offset, 0.0))
                 # Use first chunk's detected language (most reliable — full audio context)
                 if not detected_lang and chunk_lang:
                     detected_lang = chunk_lang
