@@ -129,7 +129,9 @@ export function ClipDetailModal({ clip, isPosted, isScheduled, posts = [], onClo
       >
         {/* ── Video player ── */}
         <div className="flex shrink-0 items-center justify-center overflow-hidden border-b border-c-border bg-black md:h-full md:shrink md:border-b-0 md:border-r">
-          <div className="relative mx-auto aspect-[9/16] w-full max-h-[min(38dvh,320px)] max-w-[min(72vw,240px)] overflow-hidden md:h-full md:max-h-none md:max-w-none">
+          {/* A size container: the phone-style overlays below are sized in cqw (1% of the
+              video's width) so they grow with the preview; the px values are minimums. */}
+          <div className="relative mx-auto aspect-[9/16] w-full max-h-[min(38dvh,320px)] max-w-[min(72vw,240px)] overflow-hidden [container-type:inline-size] md:h-full md:max-h-none md:max-w-none">
             {clip.storage_url
               ? <video ref={videoRef} src={clip.storage_url} className="absolute inset-0 h-full w-full object-cover" playsInline preload="metadata" poster={clip.thumbnail_url ?? undefined} />
               : clip.thumbnail_url
@@ -140,22 +142,22 @@ export function ClipDetailModal({ clip, isPosted, isScheduled, posts = [], onClo
             <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/90 via-black/10 to-transparent" />
 
             {/* social sidebar */}
-            <div className="absolute right-1.5 bottom-16 z-10 flex flex-col items-center gap-2.5">
+            <div className="absolute right-[max(6px,2cqw)] bottom-[max(64px,24cqw)] z-10 flex flex-col items-center gap-[max(10px,3.5cqw)]">
               {([["👍","4.2K"],["💬","312"],["↗","1.1K"]] as [string,string][]).map(([icon, val], i) => (
-                <div key={i} className="flex flex-col items-center gap-0.5">
-                  <div className="grid h-7 w-7 place-items-center rounded-full bg-white/15 text-xs backdrop-blur-md">{icon}</div>
-                  <span className="text-[7px] font-bold text-white/80">{val}</span>
+                <div key={i} className="flex flex-col items-center gap-[max(2px,0.6cqw)]">
+                  <div className="grid h-[max(28px,10cqw)] w-[max(28px,10cqw)] place-items-center rounded-full bg-white/15 text-[max(12px,4.4cqw)] backdrop-blur-md">{icon}</div>
+                  <span className="text-[max(7px,2.6cqw)] font-bold text-white/80">{val}</span>
                 </div>
               ))}
             </div>
 
             {/* caption overlay */}
-            <div className="absolute bottom-8 left-2 right-9 z-10">
-              <p className="text-[7.5px] font-bold text-white/90 drop-shadow">@viralo</p>
-              {primaryDescription && <p className="mt-0.5 line-clamp-2 text-[7px] leading-[1.35] text-white/80 drop-shadow">{primaryDescription}</p>}
+            <div className="absolute bottom-[max(32px,9cqw)] left-[max(8px,3cqw)] right-[max(36px,15cqw)] z-10">
+              <p className="text-[max(7.5px,3cqw)] font-bold text-white/90 drop-shadow">@viralo</p>
+              {primaryDescription && <p className="mt-[max(2px,0.6cqw)] line-clamp-2 text-[max(7px,2.8cqw)] leading-[1.35] text-white/80 drop-shadow">{primaryDescription}</p>}
               {primaryTags.length > 0 && (
-                <div className="mt-0.5 flex flex-wrap gap-0.5">
-                  {primaryTags.slice(0, 3).map((t) => <span key={t} className="text-[6.5px] font-bold text-[#ff6b8a] drop-shadow">#{t}</span>)}
+                <div className="mt-[max(2px,0.6cqw)] flex flex-wrap gap-[max(2px,1cqw)]">
+                  {primaryTags.slice(0, 3).map((t) => <span key={t} className="text-[max(6.5px,2.6cqw)] font-bold text-[#ff6b8a] drop-shadow">#{t}</span>)}
                 </div>
               )}
             </div>
@@ -163,28 +165,31 @@ export function ClipDetailModal({ clip, isPosted, isScheduled, posts = [], onClo
             {/* play button */}
             <button className="absolute inset-0 z-20 flex items-center justify-center cursor-pointer" onClick={togglePlay} aria-label={playing ? "Pause" : "Play"}>
               {!playing && (
-                <div className="grid h-11 w-11 place-items-center rounded-full bg-black/50 text-white shadow-[0_4px_20px_rgba(0,0,0,.6)] backdrop-blur-sm transition hover:scale-105">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                <div className="grid h-[max(44px,14cqw)] w-[max(44px,14cqw)] place-items-center rounded-full bg-black/50 text-white shadow-[0_4px_20px_rgba(0,0,0,.6)] backdrop-blur-sm transition hover:scale-105">
+                  <svg className="h-[max(14px,4.6cqw)] w-[max(14px,4.6cqw)]" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                 </div>
               )}
             </button>
 
             {/* seek bar */}
-            <div className="absolute bottom-0 left-0 right-0 z-30 px-2 pb-1.5">
-              <div className="flex items-center gap-1">
-                <span className="font-mono text-[6.5px] text-white/60">{fmt(videoRef.current?.currentTime ?? 0)}</span>
-                <div ref={barRef} className="relative h-[3px] flex-1 cursor-pointer rounded-full bg-white/25" onMouseDown={onBarMouseDown}>
-                  <div className="h-full rounded-full bg-white" style={{ width: `${progress * 100}%` }} />
-                  <div className="absolute top-1/2 -translate-y-1/2 h-2.5 w-2.5 rounded-full bg-white shadow" style={{ left: `calc(${progress * 100}% - 5px)` }} />
+            <div className="absolute bottom-0 left-0 right-0 z-30 px-[max(8px,3cqw)] pb-[max(6px,2.4cqw)]">
+              <div className="flex items-center gap-[max(4px,1.6cqw)]">
+                <span className="font-mono text-[max(6.5px,2.5cqw)] text-white/60">{fmt(videoRef.current?.currentTime ?? 0)}</span>
+                {/* taller hit area than the visible line, so it's easy to grab */}
+                <div ref={barRef} className="relative flex h-[max(10px,3.6cqw)] flex-1 cursor-pointer items-center" onMouseDown={onBarMouseDown}>
+                  <div className="relative h-[max(3px,1cqw)] w-full rounded-full bg-white/25">
+                    <div className="h-full rounded-full bg-white" style={{ width: `${progress * 100}%` }} />
+                  </div>
+                  <div className="absolute top-1/2 h-[max(10px,3cqw)] w-[max(10px,3cqw)] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow" style={{ left: `${progress * 100}%` }} />
                 </div>
-                <span className="font-mono text-[6.5px] text-white/60">{fmt(videoRef.current?.duration ?? 0)}</span>
+                <span className="font-mono text-[max(6.5px,2.5cqw)] text-white/60">{fmt(videoRef.current?.duration ?? 0)}</span>
               </div>
             </div>
 
             {/* status badge */}
             {(isPosted || isScheduled) && (
-              <div className={cn("absolute left-2 top-2 z-20 flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-bold text-white backdrop-blur-sm", isPosted ? "bg-amber-500/90" : "bg-blue-500/80")}>
-                <svg className="h-2.5 w-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>{isPosted ? <path d="M20 6 9 17l-5-5"/> : <><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></>}</svg>
+              <div className={cn("absolute left-[max(8px,3cqw)] top-[max(8px,3cqw)] z-20 flex items-center gap-[max(4px,1.2cqw)] rounded-full px-[max(8px,2.6cqw)] py-[max(2px,0.8cqw)] text-[max(9px,3cqw)] font-bold text-white backdrop-blur-sm", isPosted ? "bg-amber-500/90" : "bg-blue-500/80")}>
+                <svg className="h-[max(10px,3cqw)] w-[max(10px,3cqw)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>{isPosted ? <path d="M20 6 9 17l-5-5"/> : <><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></>}</svg>
                 {isPosted ? "Live" : "Queued"}
               </div>
             )}
