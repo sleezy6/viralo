@@ -390,6 +390,10 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
         "fps": meta.fps, "codec": meta.codec,
     })
 
+    if not (cfg.get("auto_publish") or cfg.get("render_on_ingest")):
+        from workers.tasks.video.suggestions import keep_source_copy
+        keep_source_copy(tenant_id, video_id, source_path)
+
     # Stage 4b: Scene frame extraction
     _publish_progress(job_id, "scene_extraction", 12, "processing", "Extracting scene frames…")
     scene_frames = _extract_scene_frames(source_path, meta.duration, n_frames=10, tmp_dir=str(work_dir))
@@ -517,6 +521,11 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
     if _user_occasion:
         _occasion = _user_occasion
 
+    # Studio flow (default): the AI's picks and runners-up become unrendered
+    # suggestions on the project timeline; nothing renders until the user exports.
+    # Auto-publish (channel subscriptions) and render_on_ingest keep rendering here.
+    studio_mode = not (cfg.get("auto_publish") or cfg.get("render_on_ingest"))
+    runners_up: list[ClipResult] = []
     clips = _ai_score_clips(
         words, meta.duration, num_clips, min_dur, max_dur,
         min_score_10=min_score_10,
@@ -530,12 +539,14 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
         yt_engagement=yt_engagement,
         occasion=_occasion,
         topic_blocks=topic_blocks,
+        runners_up_out=runners_up,
     )
 
     # Fill remaining slots with heuristic clips if AI returned fewer than requested
     if len(clips) < num_clips:
         ai_count = len(clips)
         fallback = _heuristic_clips(words, meta.duration, num_clips, min_dur, max_dur, platforms)
+        runners_up.extend(fallback)
         # Add non-overlapping heuristic clips to fill up to num_clips
         for fc in fallback:
             if len(clips) >= num_clips:
@@ -561,6 +572,11 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
     # (defaults baked into repair.py are only used when bounds aren't supplied).
     clips = _repair_all_clips(clips, words, topic_blocks, float(min_dur), float(max_dur))
     clips = _clamp_clip_durations(clips, min_dur, max_dur, meta.duration)
+    if runners_up:
+        runners_up = _clamp_clip_durations(
+            _repair_all_clips(runners_up, words, topic_blocks, float(min_dur), float(max_dur)),
+            min_dur, max_dur, meta.duration)
+        runners_up = _pick_runners_up(runners_up, clips, num_clips)
 
     _update_video(tenant_id, video_id, pipeline_step="scoring", pipeline_pct=55)
     _publish_progress(job_id, "scoring", 55, "processing",
@@ -585,6 +601,17 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
         content_type=_content_type, topic_focus=topic_focus, language=language,
     )
 
+    if studio_mode:
+        clip_ids = _store_suggestions(
+            tenant_id, video_id, job_id, clips, runners_up, all_ai_content, source_path,
+            work_dir, cfg, words, _occasion, _viral_type, words_per_line)
+        _finish_pipeline(tenant_id, video_id, job_id, cfg, clip_ids, _url_key,
+                         scene_frames, speaker_segments, topic_blocks, work_dir,
+                         done_msg=f"Done! {len(clips)} suggested clips"
+                                  + (f" + {len(runners_up)} more ideas" if runners_up else "")
+                                  + " ready in the Studio.")
+        return
+
     # Step 5: Export clips in parallel (60→95%)
     if output_quality == "source":
         _publish_progress(job_id, "export", 60, "processing",
@@ -602,7 +629,8 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
     # near-identical AI scoring still recognizes already-done work.
     with _get_session(tenant_id) as _resume_session:
         _existing = _resume_session.execute(
-            text("SELECT id, start_ms, storage_url FROM clips WHERE video_id = CAST(:vid AS uuid)"),
+            text("SELECT id, start_ms, storage_url FROM clips WHERE video_id = CAST(:vid AS uuid) "
+                 "AND status NOT IN ('suggested', 'deleted')"),
             {"vid": video_id},
         ).fetchall()
     _existing_by_start = [(row.id, row.start_ms, row.storage_url) for row in _existing]
@@ -687,10 +715,44 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
     if cancelled:
         return
 
+    if runners_up:
+        try:
+            _store_suggestions(tenant_id, video_id, job_id, [], runners_up, {}, source_path,
+                               work_dir, cfg, words, _occasion, _viral_type, words_per_line)
+        except Exception:
+            logging.exception("Storing runner-up suggestions failed for video %s", video_id)
+    _finish_pipeline(tenant_id, video_id, job_id, cfg, clip_ids, _url_key,
+                     scene_frames, speaker_segments, topic_blocks, work_dir,
+                     done_msg=f"Done! {len(clip_ids)} clips generated, uploading to cloud...")
+
+
+def _store_suggestions(tenant_id, video_id, job_id, picks, runners_up, ai_content, source_path,
+                       work_dir, cfg, words, occasion, viral_type, words_per_line) -> list[str]:
+    """Replace this video's earlier suggestions (a retried run) with picks + runners-up."""
+    from workers.tasks.video.suggestions import insert_suggestions
+    _publish_progress(job_id, "export", 80, "processing",
+                      f"Saving {len(picks) + len(runners_up)} suggestions to the timeline…")
+    with _get_session(tenant_id) as session:
+        session.execute(
+            text("UPDATE clips SET status = 'deleted', updated_at = NOW() "
+                 "WHERE video_id = CAST(:vid AS uuid) AND status = 'suggested'"),
+            {"vid": video_id},
+        )
+    items = [(c, "top", ai_content.get(i)) for i, c in enumerate(picks)]
+    items += [(c, "runner_up", None) for c in runners_up]
+    ids = insert_suggestions(tenant_id, video_id, items, source_path, work_dir, cfg, words,
+                             occasion, viral_type, words_per_line)
+    logging.info("run_video_pipeline: %d suggestions (%d picks, %d runners-up) for %s",
+                 len(ids), len(picks), len(runners_up), video_id)
+    return ids[:len(picks)]
+
+
+def _finish_pipeline(tenant_id, video_id, job_id, cfg, clip_ids, url_key, scene_frames,
+                     speaker_segments, topic_blocks, work_dir, done_msg: str) -> None:
     # Video is ready for viewing — uploads happen in background per clip
     _update_video(tenant_id, video_id, status="ready", pipeline_step="complete", pipeline_pct=100)
-    _publish_progress(job_id, "complete", 100, "complete",
-                      f"Done! {len(clip_ids)} clips generated, uploading to cloud...")
+    _publish_progress(job_id, "complete", 100, "complete", done_msg)
+    _url_key = url_key
     vid_title = _get_video_title_from_db(tenant_id, video_id)
     clip_word = "clip" if len(clip_ids) == 1 else "clips"
     _notify_video(

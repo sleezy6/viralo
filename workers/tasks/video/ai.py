@@ -54,6 +54,8 @@ __all__ = [
     '_multi_agent_viral_signals',
     '_ai_score_clips',
     '_heuristic_clips',
+    '_pick_runners_up',
+    '_title_options',
     '_multi_agent_clip_content',
     '_ai_generate_clip_content',
     '_ai_generate_video_metadata',
@@ -356,7 +358,10 @@ def _ai_score_clips(
     yt_engagement: dict | None = None,
     occasion: str = "",
     topic_blocks: list | None = None,
+    runners_up_out: list | None = None,
 ) -> list[ClipResult]:
+    """The top `num_clips` clips. When runners_up_out is a list, it's filled with the
+    next-best candidates that don't overlap the picks (Studio shows them as options)."""
     if platforms is None:
         platforms = ["tiktok", "reels", "shorts"]
     if not words:
@@ -704,11 +709,56 @@ Return ONLY JSON:
             if len(deduped) >= num_clips:
                 break
         deduped.sort(key=lambda c: c.start)
+        if runners_up_out is not None:
+            pool = [c for c in clips if c not in deduped]
+            target_len = min(max_dur, max(min_dur, (min_dur + max_dur) // 2))
+            for sig in sorted(signals, key=lambda x: x.get("score", 0), reverse=True):
+                ts = float(sig.get("timestamp_sec", 0) or 0)
+                start = max(0.0, ts - 3.0)
+                end = min(duration, start + target_len)
+                if end - start < min_dur:
+                    continue
+                raw_sc = float(sig.get("score", 5.0) or 5.0)
+                sc = raw_sc if precision_mode else _floor + (raw_sc / 10.0) * (10.0 - _floor)
+                pool.append(ClipResult(
+                    start=round(start, 2), end=round(end, 2), score=round(sc, 2),
+                    title=(sig.get("trigger_words") or f"Moment at {int(ts // 60)}:{int(ts % 60):02d}")[:100],
+                    reason=(sig.get("stop_scroll_reason") or sig.get("reason") or "")[:200],
+                    platform=platforms[0], hook_score=_hook_score(words, start),
+                ))
+            if ad_segs:
+                pool = [c for c in pool if not any(c.start < e and c.end > s_ for s_, e in ad_segs)]
+            runners_up_out.extend(_pick_runners_up(pool, deduped, num_clips))
         return deduped
 
     except Exception as e:
         logging.exception("_ai_score_clips failed: %s", e)
         return []
+
+
+def _overlap_frac(a: ClipResult, b: ClipResult) -> float:
+    """How much of the shorter clip the two share (0..1)."""
+    inter = min(a.end, b.end) - max(a.start, b.start)
+    if inter <= 0:
+        return 0.0
+    return inter / max(min(a.end - a.start, b.end - b.start), 0.01)
+
+
+def _pick_runners_up(pool: list[ClipResult], picks: list[ClipResult], limit: int,
+                     max_overlap: float = 0.5) -> list[ClipResult]:
+    """Best-scoring candidates from pool that share at most half their length with a
+    pick or with each other, up to limit, in time order."""
+    chosen: list[ClipResult] = []
+    for c in sorted(pool, key=lambda c: c.score, reverse=True):
+        if len(chosen) >= limit:
+            break
+        if c.end - c.start <= 0:
+            continue
+        if any(_overlap_frac(c, k) > max_overlap for k in list(picks) + chosen):
+            continue
+        chosen.append(c)
+    chosen.sort(key=lambda c: c.start)
+    return chosen
 
 
 # ── Stage 5: Heuristic fallback ───────────────────────────────────────────────
@@ -938,10 +988,42 @@ Return JSON:
 
     return {
         "title": best_title,
+        "titles": _title_options(title_result.get("titles"), best_title if title_result.get("best_title") else None),
         "platforms": merged_platforms,
         "all_hashtags": all_hashtags,  # includes # prefix, all lowercase
         "ai_ok": bool(title_result.get("best_title")),
     }
+
+
+def _title_options(raw, best: str | None = None, limit: int = 8) -> list[dict]:
+    """The AI's title options as [{text, score, hook_type}], best first, deduplicated.
+    The chosen best title is always included."""
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(text, score=None, hook=None):
+        text = " ".join(str(text or "").split())[:100]
+        key = text.lower()
+        if not text or key in seen:
+            return
+        seen.add(key)
+        try:
+            sc = round(float(score), 1) if score is not None else None
+        except (TypeError, ValueError):
+            sc = None
+        out.append({"text": text, "score": sc, "hook_type": (str(hook)[:20] if hook else None)})
+
+    if isinstance(raw, list):
+        for t in raw:
+            if isinstance(t, dict):
+                _add(t.get("text") or t.get("title"), t.get("score"), t.get("hook_type"))
+            elif isinstance(t, str):
+                _add(t)
+    if best and best.strip().lower() not in seen:
+        top = max((o["score"] or 0 for o in out), default=None)
+        _add(best, top)
+    out.sort(key=lambda o: -(o["score"] or 0))
+    return out[:limit]
 
 
 def _ai_generate_clip_content(

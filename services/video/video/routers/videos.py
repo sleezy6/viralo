@@ -790,7 +790,7 @@ async def search_videos_and_clips(
         select(Clip)
         .where(
             Clip.tenant_id == tenant_uuid,
-            Clip.status != "deleted",
+            Clip.status.notin_(["deleted", "suggested"]),
             or_(
                 Clip.title.ilike(term),
                 Clip.caption_srt.ilike(term),
@@ -1339,10 +1339,13 @@ async def list_clips(
     sort_by: Literal["created_at", "score"] = Query("created_at"),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
+    include_suggested: bool = Query(False, description="Also return unrendered Studio suggestions"),
     token: TokenPayload = Depends(get_current_user),
     db: AsyncSession = Depends(get_tenant_db),
 ):
     query = select(Clip).where(Clip.tenant_id == uuid.UUID(token.tenant_id), Clip.status != "deleted")
+    if not include_suggested:
+        query = query.where(Clip.status != "suggested")
     if video_id:
         query = query.where(Clip.video_id == video_id)
     if min_virality_score is not None:
@@ -1486,7 +1489,8 @@ async def download_clips_zip(
         raise HTTPException(status_code=400, detail="Max 50 clips per zip.")
 
     result = await db.execute(
-        select(Clip).where(Clip.id.in_(body.clip_ids), Clip.tenant_id == uuid.UUID(token.tenant_id), Clip.status != "deleted")
+        select(Clip).where(Clip.id.in_(body.clip_ids), Clip.tenant_id == uuid.UUID(token.tenant_id),
+                           Clip.status.notin_(["deleted", "suggested"]))
     )
     clips = result.scalars().all()
 

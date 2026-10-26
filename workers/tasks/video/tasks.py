@@ -208,7 +208,9 @@ def upload_clip_to_storage(self, clip_id: str, clip_path: str, tenant_id: str, j
                     counts = session.execute(
                         text("""
                             SELECT
-                                COUNT(*) FILTER (WHERE status IN ('pending_upload','uploading')) AS pending,
+                                -- Studio suggestions (and clips being re-exported) still need the source.
+                                COUNT(*) FILTER (WHERE status IN ('pending_upload','uploading',
+                                                                  'suggested','regenerating')) AS pending,
                                 COUNT(*) FILTER (WHERE status IN ('ready','upload_failed')) AS done
                               FROM clips WHERE video_id = CAST(:vid AS uuid)
                         """),
