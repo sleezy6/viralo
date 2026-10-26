@@ -119,8 +119,10 @@ export function ClipDetailModal({ clip, isPosted, isScheduled, posts = [], onClo
         aria-labelledby="clip-detail-title"
         className={cn(
           "flex h-[100dvh] w-full min-h-0 flex-col overflow-hidden border-c-border bg-surface-0 shadow-[0_48px_120px_rgba(0,0,0,.85)]",
-          "sm:h-auto sm:max-h-[min(88vh,580px)] sm:max-w-[860px] sm:rounded-[22px] sm:border",
-          "md:grid md:grid-cols-[minmax(0,300px)_minmax(0,1fr)] md:grid-rows-1",
+          "sm:h-auto sm:max-h-[min(90vh,900px)] sm:max-w-[1200px] sm:rounded-[22px] sm:border",
+          // Video column: as wide as fits a 9:16 preview in the window's height.
+          "md:grid md:grid-cols-[minmax(0,min(380px,calc(90vh*0.5625)))_minmax(0,1fr)] md:grid-rows-1",
+          "lg:grid-cols-[minmax(0,min(500px,calc(90vh*0.5625)))_minmax(0,1fr)]",
         )}
         style={{ animation: "fadeUp .22s cubic-bezier(.22,.8,.4,1)" }}
         onClick={(e) => e.stopPropagation()}
