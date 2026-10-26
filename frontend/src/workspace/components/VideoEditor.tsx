@@ -516,6 +516,7 @@ export function VideoEditor({
           <button
             onClick={handleSave}
             disabled={saving}
+            title="Keep these edits for later without changing the video. Apply to clip re-renders the video with them."
             className={cn(
               "flex items-center gap-1.5 rounded-lg border px-3.5 py-1.5 text-[12px] font-semibold transition cursor-pointer disabled:opacity-50",
               saveStatus === "ok" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
@@ -527,7 +528,7 @@ export function VideoEditor({
               ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" /> Saving</>
               : saveStatus === "ok" ? "✓ Saved"
               : saveStatus === "err" ? "Failed"
-              : <><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save</>}
+              : <><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save draft</>}
           </button>
 
           <button

@@ -225,8 +225,11 @@ export function CaptionEditor({ captions, duration, onChange }: CaptionEditorPro
           onClick={() => save(editing)}
           className="w-full rounded-[9px] bg-[#ff3d6a] py-2 text-[13px] font-bold text-white hover:bg-[#e8304f] transition cursor-pointer"
         >
-          Save Caption
+          Update caption
         </button>
+        <p className="text-center text-[11px] leading-snug text-c-text-muted">
+          Changes show in the preview. Click <span className="font-semibold text-c-text-secondary">Apply to clip</span> to put them into the video.
+        </p>
       </div>
     );
   }
