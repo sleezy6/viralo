@@ -1,4 +1,5 @@
-// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): editor preview size fix, poster, preload and load errors; Apply to clip.
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): editor preview size fix (true 9:16, wider
+// panel), poster, preload and load errors; Apply to clip.
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
@@ -557,15 +558,18 @@ export function VideoEditor({
       <div className="flex flex-1 min-h-0 overflow-hidden">
 
         {/* ── Left: Video preview ── */}
-        <div className="flex flex-col items-center justify-between bg-[#0a0a0f] border-r border-white/[.05] py-6 px-6 w-[300px] shrink-0">
+        {/* Wider on big screens: as wide as a full-height 9:16 preview needs (max 520 px). */}
+        <div className="flex flex-col items-center justify-between bg-[#0a0a0f] border-r border-white/[.05] py-6 px-6 w-[clamp(300px,calc((100dvh-200px)*0.5625+48px),520px)] shrink-0">
 
           {/* Canvas / preview */}
-          <div className="flex-1 flex items-center justify-center w-full min-h-0">
+          <div className="flex-1 flex items-center justify-center w-full min-h-0 [container-type:size]">
             <div
               className="relative overflow-hidden rounded-2xl bg-black shadow-[0_0_0_1px_rgba(255,255,255,.07),0_24px_64px_rgba(0,0,0,.9)]"
-              // height is required: with only max-* limits and absolutely positioned
-              // children, the 9:16 box collapsed to 0×0 and the preview showed nothing.
-              style={{ height: "100%", maxHeight: "100%", aspectRatio: "9/16", maxWidth: "100%" }}
+              // Always 9:16: as wide as the panel allows, or as tall as it allows,
+              // whichever is smaller (height 100% + max-width 100% squeezed it narrower
+              // than 9:16 when the panel was tall). The size needs to be explicit:
+              // with only max-* limits the box collapsed to 0×0 and showed nothing.
+              style={{ width: "min(100cqw, calc(100cqh * 9 / 16))", aspectRatio: "9 / 16" }}
             >
               {clip.thumbnail_url && (
                 <img src={clip.thumbnail_url} alt="" className="absolute inset-0 h-full w-full object-cover" />
