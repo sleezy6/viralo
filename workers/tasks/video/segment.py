@@ -143,7 +143,7 @@ Return JSON:
   ]
 }}"""
     try:
-        result = llm_fn(prompt, temperature=0.2)
+        result = llm_fn([{"role": "user", "content": prompt}], temperature=0.2, max_tokens=800)
         topic_map = {t["block_index"]: t for t in (result or {}).get("topics", [])}
     except Exception as e:
         log.warning("topic LLM failed: %s", e)
