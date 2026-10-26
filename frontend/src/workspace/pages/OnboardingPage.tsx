@@ -388,6 +388,7 @@ function S5Plan({ onComplete }: { onComplete: (dest: string) => void }) {
     try {
       await submitFinalize(planName, dest);
     } catch (e: any) {
+      if (/already finalized/i.test(e?.message ?? "")) { window.location.replace("/"); return; }
       setError(e?.message ?? "Failed to finalize. Try again.");
       setLoadingPlan(null);
     }
@@ -476,6 +477,8 @@ export function OnboardingPage() {
     try {
       await submitSkip();
     } catch (err: any) {
+      // Set up already (e.g. in another tab): nothing to skip, go to the dashboard.
+      if (/already finalized/i.test(err?.message ?? "")) { window.location.replace("/"); return; }
       // skip()/finalize failed — no valid token applied, so don't navigate
       // (route guard would just bounce back to onboarding on stale state).
       setSkipping(false);

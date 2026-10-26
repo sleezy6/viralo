@@ -83,6 +83,8 @@ export default function App() {
 
   /* ── Onboarding gate ── */
   if (user.onboarding_step === 0) return <WorkspacePage page="onboarding" />;
+  // Already set up: the wizard can't run again, so /onboarding goes to the dashboard.
+  if (path === "/onboarding") { window.location.replace("/"); return null; }
 
   /* ── Legacy billing redirect ── */
   if (path === "/billing/success") {
