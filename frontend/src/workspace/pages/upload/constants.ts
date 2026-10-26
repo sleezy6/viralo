@@ -55,7 +55,7 @@ export function buildStudioModalClipConfig(input: StudioModalClipInput): ClipCon
       : {}),
     ...(input.maxClips != null ? { max_clips: input.maxClips } : {}),
     ...(input.topicFocus ? { topic_focus: input.topicFocus } : {}),
-    ...(input.autoPublish ? { auto_publish: true, auto_publish_config: input.autoPublish } : {}),
+    ...(input.autoPublish ? { auto_publish: true, auto_publish_config: input.autoPublish, render_on_ingest: true } : {}),
   };
 }
 
@@ -76,6 +76,8 @@ export const DEFAULT_CONFIG: ClipConfig = {
   template_id: null,
   music_track: null,
   occasion: null,
+  // Studio: the AI's clips become suggestions on the project timeline; you export them.
+  render_on_ingest: false,
 };
 
 export type CaptionStyleOption = {

@@ -8,9 +8,9 @@ const TIER_LABEL: Record<string, string> = { top: "AI pick", runner_up: "Other i
 export function statusLabel(r: Region): { text: string; cls: string } {
   const c = r.clip;
   if (isBusy(c)) return { text: "Exporting…", cls: "text-amber-300" };
+  if (c.status === "upload_failed" || c.status === "failed") return { text: "Export failed", cls: "text-red-400" };
   if (c.clip_metadata?.dirty) return { text: "Edited · export again", cls: "text-amber-300" };
   if (isExported(c)) return { text: "Exported", cls: "text-emerald-300" };
-  if (c.status === "upload_failed" || c.status === "failed") return { text: "Export failed", cls: "text-red-400" };
   return { text: "Not exported", cls: "text-c-text-muted" };
 }
 

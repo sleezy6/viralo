@@ -12,6 +12,7 @@ import logging
 import os
 import subprocess
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -21,14 +22,19 @@ from workers.celery_app import celery_app
 from workers.tasks.video import hwaccel
 from workers.tasks.video._core import VIDEO_TEMP_DIR, _get_session
 
-__all__ = ["build_preview_assets", "build_video_preview", "PEAKS_PER_SEC", "compute_peaks"]
+__all__ = ["build_preview_assets", "build_video_preview", "queue_preview", "PEAKS_PER_SEC", "compute_peaks"]
 
 log = logging.getLogger(__name__)
 PEAKS_PER_SEC = 20
 _PEAK_RATE = 2000  # Hz of the mono PCM the peaks are measured from
 
 
+# A build still "queued"/"building" after this long died (worker restart, lost message).
+PREVIEW_STALE_SEC = 5 * 3600
+
+
 def _set_status(tenant_id: str, video_id: str, **fields) -> None:
+    fields["at"] = int(time.time())
     with _get_session(tenant_id) as session:
         session.execute(
             text("""
@@ -128,10 +134,24 @@ def build_preview_assets(tenant_id: str, video_id: str, source_path: str, fps: f
     return result
 
 
+def queue_preview(tenant_id: str, video_id: str) -> None:
+    """Queue the preview build for a project (marks it "queued"; never raises)."""
+    try:
+        _set_status(tenant_id, video_id, status="queued", error=None)
+        build_video_preview.delay(tenant_id, video_id)
+    except Exception as e:
+        log.warning("[Studio] couldn't queue the preview for %s: %s", video_id, e)
+        try:
+            _set_status(tenant_id, video_id, status="failed", error="Couldn't start the preview")
+        except Exception:
+            pass
+
+
 @celery_app.task(name="workers.tasks.video.build_video_preview", soft_time_limit=4 * 3600,
                  time_limit=4 * 3600 + 120)
 def build_video_preview(tenant_id: str, video_id: str) -> dict:
-    """Preview assets for an existing project (made before the Studio existed)."""
+    """The Studio preview for a project, from its stored source (or a fresh YouTube
+    download when none is stored)."""
     from workers.tasks.video.regenerate import _fetch_source
     from workers.tasks.video.transcribe import _probe_video
 

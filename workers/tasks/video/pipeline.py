@@ -390,18 +390,10 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
         "fps": meta.fps, "codec": meta.codec,
     })
 
-    _preview_thread = None
-    if not (cfg.get("auto_publish") or cfg.get("render_on_ingest")):
-        # Studio: keep the source for later exports, and build the timeline preview
-        # (proxy + waveform) alongside transcription and scoring.
-        import threading
-        from workers.tasks.video.preview import build_preview_assets
+    if _studio_mode(cfg):
+        # Studio: exports render later from the stored source, so keep it.
         from workers.tasks.video.suggestions import keep_source_copy
         keep_source_copy(tenant_id, video_id, source_path)
-        _preview_thread = threading.Thread(
-            target=build_preview_assets, name=f"preview-{video_id}", daemon=True,
-            args=(tenant_id, video_id, source_path, meta.fps, meta.has_audio))
-        _preview_thread.start()
 
     # Stage 4b: Scene frame extraction
     _publish_progress(job_id, "scene_extraction", 12, "processing", "Extracting scene frames…")
@@ -533,7 +525,7 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
     # Studio flow (default): the AI's picks and runners-up become unrendered
     # suggestions on the project timeline; nothing renders until the user exports.
     # Auto-publish (channel subscriptions) and render_on_ingest keep rendering here.
-    studio_mode = not (cfg.get("auto_publish") or cfg.get("render_on_ingest"))
+    studio_mode = _studio_mode(cfg)
     runners_up: list[ClipResult] = []
     clips = _ai_score_clips(
         words, meta.duration, num_clips, min_dur, max_dur,
@@ -548,7 +540,7 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
         yt_engagement=yt_engagement,
         occasion=_occasion,
         topic_blocks=topic_blocks,
-        runners_up_out=runners_up,
+        runners_up_out=runners_up if studio_mode else None,
     )
 
     # Fill remaining slots with heuristic clips if AI returned fewer than requested
@@ -611,17 +603,19 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
     )
 
     if studio_mode:
-        if _preview_thread is not None and _preview_thread.is_alive():
-            _publish_progress(job_id, "export", 75, "processing", "Finishing the timeline preview…")
-            _preview_thread.join()
         clip_ids = _store_suggestions(
             tenant_id, video_id, job_id, clips, runners_up, all_ai_content, source_path,
             work_dir, cfg, words, _occasion, _viral_type, words_per_line)
+        # The timeline preview (proxy + waveform) is built by its own task from the stored
+        # source, so a slow encode never holds up (or times out) processing.
+        from workers.tasks.video.preview import queue_preview
+        queue_preview(tenant_id, video_id)
         _finish_pipeline(tenant_id, video_id, job_id, cfg, clip_ids, _url_key,
                          scene_frames, speaker_segments, topic_blocks, work_dir,
                          done_msg=f"Done! {len(clips)} suggested clips"
                                   + (f" + {len(runners_up)} more ideas" if runners_up else "")
-                                  + " ready in the Studio.")
+                                  + " are ready to edit and export.",
+                         notify_body=f"{len(clips)} suggested clip{'s' if len(clips) != 1 else ''} ready to edit")
         return
 
     # Step 5: Export clips in parallel (60→95%)
@@ -727,12 +721,6 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
     if cancelled:
         return
 
-    if runners_up:
-        try:
-            _store_suggestions(tenant_id, video_id, job_id, [], runners_up, {}, source_path,
-                               work_dir, cfg, words, _occasion, _viral_type, words_per_line)
-        except Exception:
-            logging.exception("Storing runner-up suggestions failed for video %s", video_id)
     _finish_pipeline(tenant_id, video_id, job_id, cfg, clip_ids, _url_key,
                      scene_frames, speaker_segments, topic_blocks, work_dir,
                      done_msg=f"Done! {len(clip_ids)} clips generated, uploading to cloud...")
@@ -759,8 +747,15 @@ def _store_suggestions(tenant_id, video_id, job_id, picks, runners_up, ai_conten
     return ids[:len(picks)]
 
 
+def _studio_mode(cfg: dict) -> bool:
+    """Studio flow: the user's upload asked for it (render_on_ingest False) and nothing
+    publishes automatically. API/MCP/channel imports keep rendering while processing."""
+    return cfg.get("render_on_ingest") is False and not cfg.get("auto_publish")
+
+
 def _finish_pipeline(tenant_id, video_id, job_id, cfg, clip_ids, url_key, scene_frames,
-                     speaker_segments, topic_blocks, work_dir, done_msg: str) -> None:
+                     speaker_segments, topic_blocks, work_dir, done_msg: str,
+                     notify_body: str | None = None) -> None:
     # Video is ready for viewing — uploads happen in background per clip
     _update_video(tenant_id, video_id, status="ready", pipeline_step="complete", pipeline_pct=100)
     _publish_progress(job_id, "complete", 100, "complete", done_msg)
@@ -770,7 +765,7 @@ def _finish_pipeline(tenant_id, video_id, job_id, cfg, clip_ids, url_key, scene_
     _notify_video(
         tenant_id, video_id, "video_ready",
         "Your video is ready",
-        f"{len(clip_ids)} {clip_word} generated{f' from {vid_title!r}' if vid_title else ''}.",
+        f"{notify_body or f'{len(clip_ids)} {clip_word} generated'}{f' from {vid_title!r}' if vid_title else ''}.",
     )
 
     # Notify frontend that all clips are ready to display (with thumbnails + pending_upload status)

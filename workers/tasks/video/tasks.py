@@ -168,6 +168,8 @@ def upload_clip_to_storage(self, clip_id: str, clip_path: str, tenant_id: str, j
                        SET status = 'ready',
                            storage_url = :url,
                            upload_error = NULL,
+                           -- the file now matches the Studio edits
+                           metadata = COALESCE(metadata, '{}'::jsonb) - 'dirty',
                            updated_at = NOW()
                      WHERE id = CAST(:cid AS uuid)
                 """),
@@ -1420,6 +1422,26 @@ def reconcile_stuck_videos(self) -> dict:
             s.commit()
     except Exception as e:
         logging.warning("reconcile_stuck_videos: clip reset failed: %s", e)
+    # Studio: title requests and preview builds whose task died stop spinning.
+    try:
+        with Session(engine) as s:
+            s.execute(text("""
+                UPDATE clips
+                   SET metadata = (metadata - 'titles_pending')
+                                  || jsonb_build_object('titles_error', CAST(:msg AS text))
+                 WHERE metadata ? 'titles_pending'
+                   AND COALESCE((metadata->>'titles_at')::bigint, 0) < EXTRACT(EPOCH FROM NOW()) - 1200
+            """), {"msg": "The AI didn't answer in time. Try again."})
+            s.execute(text("""
+                UPDATE videos
+                   SET metadata = jsonb_set(metadata, '{studio}', (metadata->'studio')
+                                  || jsonb_build_object('status', 'failed', 'error', CAST(:msg AS text)))
+                 WHERE metadata->'studio'->>'status' IN ('queued', 'building')
+                   AND COALESCE((metadata->'studio'->>'at')::bigint, 0) < EXTRACT(EPOCH FROM NOW()) - 18000
+            """), {"msg": "The preview build stopped. Try again."})
+            s.commit()
+    except Exception as e:
+        logging.warning("reconcile_stuck_videos: studio reset failed: %s", e)
     if requeued or failed or unstuck:
         logging.info("reconcile_stuck_videos: requeued=%d failed=%d clips_unstuck=%d", requeued, failed, unstuck)
     return {"requeued": requeued, "failed": failed}

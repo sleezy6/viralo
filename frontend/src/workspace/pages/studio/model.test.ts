@@ -1,7 +1,7 @@
 // Added 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0).
 import { describe, expect, it } from "vitest";
 import type { ClipApiResponse, TranscriptWord } from "@/lib/api";
-import { captionsFor, clampRegion, fmtTime, parseTime, speakerColor } from "./model";
+import { captionsFor, clampRegion, fmtTime, keepLinks, parseTime, speakerColor } from "./model";
 
 describe("studio model", () => {
   it("clamps regions to the video and the length limits", () => {
@@ -26,6 +26,18 @@ describe("studio model", () => {
       ["what", 2.3, 2.5, "S2"], ["up", 2.6, 2.8, "S1"], ["late", 9, 9.2, "S1"]];
     const lines = captionsFor(w, 1, 5);
     expect(lines.map((l) => [l.text, l.speaker])).toEqual([["hi there.", "S1"], ["yo what", "S2"], ["up", "S1"]]);
+  });
+
+  it("keeps transcript captions outside the edited stretch (after extending the clip)", () => {
+    const clip = { clip_metadata: { custom_captions: { range: [0, 3], items: [{ text: "Edited!", start: 1, end: 2 }] } } } as unknown as ClipApiResponse;
+    const w: TranscriptWord[] = [["a", 1, 1.5, null], ["later.", 6, 6.5, null]];
+    expect(captionsFor(w, 0, 8, clip).map((l) => l.text)).toEqual(["Edited!", "later."]);
+  });
+
+  it("keeps links whose file didn't change", () => {
+    const a = { id: "1", storage_url: "/s/x.mp4?sig=1", thumbnail_url: "/s/t.jpg?sig=1" } as ClipApiResponse;
+    const b = { id: "1", storage_url: "/s/x.mp4?sig=2", thumbnail_url: "/s/t2.jpg?sig=2" } as ClipApiResponse;
+    expect(keepLinks([a], [b])[0]).toMatchObject({ storage_url: "/s/x.mp4?sig=1", thumbnail_url: "/s/t2.jpg?sig=2" });
   });
 
   it("uses edited captions when the clip has them", () => {

@@ -345,9 +345,6 @@ def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
                 if not exported:
                     raise RuntimeError("render produced no clip")
                 _, clip_path = exported
-                with _get_session(tenant_id) as session:  # the render now matches the Studio edits
-                    session.execute(text("UPDATE clips SET metadata = metadata - 'dirty' "
-                                         "WHERE id = CAST(:cid AS uuid) AND metadata ? 'dirty'"), {"cid": cid})
                 if (start, end) != (float(row.start_sec), float(row.end_sec)):
                     _save_new_timing(tenant_id, cid, start, end,
                                      start_moved=abs(start - float(row.start_sec)) >= 0.05)

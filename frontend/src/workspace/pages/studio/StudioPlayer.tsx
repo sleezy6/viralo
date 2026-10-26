@@ -31,7 +31,9 @@ export const StudioPlayer = forwardRef<StudioPlayerHandle, {
   onTime: (t: number) => void;
   onPlayingChange?: (playing: boolean) => void;
   emptyState?: React.ReactNode;
-}>(function StudioPlayer({ src, aspect, captions, speakers, showCaptions, onTime, onPlayingChange, emptyState }, ref) {
+  /** The video couldn't be loaded (e.g. its signed link expired). */
+  onError?: () => void;
+}>(function StudioPlayer({ src, aspect, captions, speakers, showCaptions, onTime, onPlayingChange, emptyState, onError }, ref) {
   const video = useRef<HTMLVideoElement>(null);
   const stopAt = useRef<number | null>(null);
   const [time, setTime] = useState(0);
@@ -75,7 +77,10 @@ export const StudioPlayer = forwardRef<StudioPlayerHandle, {
     return () => cancelAnimationFrame(raf);
   }, [playing, onTime]);
 
+  // A new link for the same video (refreshed after expiry) picks up where it was.
+  const resumeAt = useRef(0);
   useEffect(() => { setError(""); }, [src]);
+  useEffect(() => { resumeAt.current = time; }, [time]);
 
   const target = ratio(aspect);
   const narrower = target < srcRatio - 0.01;
@@ -102,11 +107,12 @@ export const StudioPlayer = forwardRef<StudioPlayerHandle, {
         onLoadedMetadata={(e) => {
           const v = e.currentTarget;
           if (v.videoWidth && v.videoHeight) setSrcRatio(v.videoWidth / v.videoHeight);
+          if (resumeAt.current > 0.5 && Math.abs(v.currentTime - resumeAt.current) > 0.5) v.currentTime = resumeAt.current;
         }}
         onPlay={() => { setPlaying(true); onPlayingChange?.(true); }}
         onPause={() => { setPlaying(false); onPlayingChange?.(false); }}
         onSeeked={(e) => { setTime(e.currentTarget.currentTime); onTime(e.currentTarget.currentTime); }}
-        onError={() => setError("The preview couldn't be played.")}
+        onError={() => { setError("The preview couldn't be played."); onError?.(); }}
         onClick={() => { const v = video.current; if (v) { if (v.paused) void v.play().catch(() => {}); else v.pause(); } }}
       />
 

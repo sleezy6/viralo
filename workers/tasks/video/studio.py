@@ -77,21 +77,29 @@ def _suggest_clip_titles(tenant_id: str, clip_id: str) -> dict:
                                        "server (and that it isn't cut off), then try again."},
                   drop=("titles_pending",))
         return {"ok": False}
-    patch: dict = {"title_options": merge_title_options(old, content["titles"])}
+    options = merge_title_options(old, content["titles"])
+    _set_meta(tenant_id, clip_id, {"title_options": options}, drop=("titles_pending", "titles_error"))
     # A clip the AI never titled (runner-up / manual) gets the best new one, and its
-    # descriptions/tags, so it's ready to export; a chosen title is never replaced.
-    if not cmeta.get("title_chosen") and not old:
-        patch["ai_title"] = content["title"][:100]
-        if content.get("platforms") and not cmeta.get("platforms"):
-            patch["platforms"] = content["platforms"]
-        if content.get("all_hashtags") and not cmeta.get("trending_hashtags"):
-            patch["trending_hashtags"] = content["all_hashtags"]
-    _set_meta(tenant_id, clip_id, patch, drop=("titles_pending", "titles_error"))
-    if "ai_title" in patch:
+    # descriptions/tags, so it's ready to export. Never over a title the user picked or
+    # typed meanwhile: the condition is checked in the same statement that writes.
+    if not old:
+        fill = {"ai_title": content["title"][:100]}
+        if content.get("platforms"):
+            fill["platforms"] = content["platforms"]
+        if content.get("all_hashtags"):
+            fill["trending_hashtags"] = content["all_hashtags"]
         with _get_session(tenant_id) as session:
-            session.execute(text("UPDATE clips SET title = :t WHERE id = CAST(:cid AS uuid)"),
-                            {"t": patch["ai_title"], "cid": clip_id})
-    return {"ok": True, "count": len(patch["title_options"])}
+            session.execute(
+                text("""
+                    UPDATE clips
+                       SET title = :t,
+                           metadata = CAST(:fill AS jsonb) || COALESCE(metadata, '{}'::jsonb)
+                                      || jsonb_build_object('ai_title', CAST(:t AS text))
+                     WHERE id = CAST(:cid AS uuid) AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'title_chosen')
+                """),
+                {"t": fill["ai_title"], "fill": json.dumps(fill), "cid": clip_id},
+            )
+    return {"ok": True, "count": len(options)}
 
 
 @celery_app.task(name="workers.tasks.video.suggest_clip_titles", soft_time_limit=900, time_limit=960)

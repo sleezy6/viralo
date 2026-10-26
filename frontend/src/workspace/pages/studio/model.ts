@@ -79,11 +79,21 @@ export function captionsFor(words: TranscriptWord[], start: number, end: number,
                             clip?: ClipApiResponse | null, perLine = 5): CaptionLine[] {
   const custom = clip?.clip_metadata?.custom_captions;
   if (custom?.items?.length) {
-    return custom.items
+    // As the export does: the edited lines inside the stretch that was edited, the
+    // transcript's own captions outside it (e.g. after the clip was extended).
+    const [lo, hi] = custom.range ?? [start, end];
+    const edited = custom.items
       .map((it) => ({ text: it.text, start: Math.max(it.start, start), end: Math.min(it.end, end),
                       speaker: speakerAt(words, it.start, it.end) }))
       .filter((l) => l.end - l.start >= 0.05);
+    const outside = transcriptLines(words, start, end, perLine)
+      .filter((l) => { const mid = (l.start + l.end) / 2; return mid < lo || mid > hi; });
+    return [...edited, ...outside].sort((a, b) => a.start - b.start);
   }
+  return transcriptLines(words, start, end, perLine);
+}
+
+function transcriptLines(words: TranscriptWord[], start: number, end: number, perLine: number): CaptionLine[] {
   const lines: CaptionLine[] = [];
   let cur: TranscriptWord[] = [];
   const flush = () => {
@@ -124,3 +134,29 @@ export function speakerName(speakers: VideoSpeakers | null | undefined, id: stri
   const s = speakers?.list?.find((x) => x.id === id);
   return s?.name || `Speaker ${id.replace(/^S/, "")}`;
 }
+
+/** Same file, maybe a fresh signature: signed links change on every API response. */
+export function samePath(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return a === b;
+  return a.split("?")[0] === b.split("?")[0];
+}
+
+/** Keep the links already in use when only their signature changed, so players and
+ * thumbnails don't reload on every refresh. */
+export function keepLinks(prev: ClipApiResponse[], next: ClipApiResponse[]): ClipApiResponse[] {
+  const old = new Map(prev.map((c) => [c.id, c]));
+  return next.map((c) => {
+    const o = old.get(c.id);
+    if (!o) return c;
+    return {
+      ...c,
+      storage_url: samePath(o.storage_url, c.storage_url) ? o.storage_url : c.storage_url,
+      thumbnail_url: samePath(o.thumbnail_url, c.thumbnail_url) ? o.thumbnail_url : c.thumbnail_url,
+    };
+  });
+}
+
+/** A title request that never finished (its task died) stops counting as running. */
+export const titlesPending = (c: ClipApiResponse) =>
+  Boolean(c.clip_metadata?.titles_pending)
+  && Date.now() / 1000 - (c.clip_metadata?.titles_at ?? Date.now() / 1000) < 20 * 60;

@@ -122,6 +122,9 @@ class ClipConfig(BaseModel):
     # Auto-publish: schedule generated clips to social accounts after the pipeline completes
     auto_publish: bool = Field(default=False, description="Auto-schedule clips to social accounts after generation")
     auto_publish_config: AutoPublishConfig | None = Field(default=None, description="Auto-publish settings")
+    # False = Studio: clips are suggestions on the project timeline and render when the
+    # user exports them. Unset (API/MCP/channel imports) or True = render while processing.
+    render_on_ingest: bool | None = Field(default=None, description="Render clips while processing (false = Studio suggestions)")
 
     @model_validator(mode="after")
     def _check_duration_bounds(self) -> ClipConfig:
@@ -230,7 +233,7 @@ class VideoResponse(BaseModel):
         if not isinstance(st, dict):
             return None
         return {"status": st.get("status"), "preview_url": sign_media_url(st.get("preview")),
-                "peaks_url": sign_media_url(st.get("peaks")), "error": st.get("error")}
+                "peaks_url": sign_media_url(st.get("peaks")), "error": st.get("error"), "at": st.get("at")}
 
     @field_validator("speakers", mode="before")
     @classmethod

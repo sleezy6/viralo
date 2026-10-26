@@ -141,7 +141,8 @@ def dispatch_video_webhook(self, tenant_id: str, video_id: str, status: str, err
             {"vid": video_id, "tid": tenant_id},
         ).fetchone()
         clip_count = db.execute(
-            text("SELECT COUNT(*) FROM clips WHERE video_id = CAST(:vid AS uuid) AND tenant_id = CAST(:tid AS uuid)"),
+            text("SELECT COUNT(*) FROM clips WHERE video_id = CAST(:vid AS uuid) AND tenant_id = CAST(:tid AS uuid) "
+                 "AND status NOT IN ('suggested', 'deleted')"),
             {"vid": video_id, "tid": tenant_id},
         ).scalar() or 0
 

@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { cn, downloadUrl, safeFilename } from "@/lib/utils";
 import type { VideoSpeakers } from "@/lib/api";
-import { type CaptionLine, type Region, fmtTime, isBusy, isExported, parseTime, tierOf, titleOf } from "./model";
+import { type CaptionLine, type Region, fmtTime, isBusy, isExported, parseTime, tierOf, titleOf, titlesPending } from "./model";
 import { statusLabel } from "./RegionList";
 import { StudioCaptions } from "./StudioCaptions";
 
@@ -32,6 +32,7 @@ export function RegionPanel({ region, lines, speakers, duration, onPatch, onMore
   const exported = isExported(c);
   const title = titleOf(c);
   const options = meta.title_options ?? [];
+  const asking = titlesPending(c);
   const [custom, setCustom] = useState("");
   const [err, setErr] = useState("");
   const [working, setWorking] = useState<string | null>(null);
@@ -74,13 +75,13 @@ export function RegionPanel({ region, lines, speakers, duration, onPatch, onMore
       <div>
         <div className="mb-1.5 flex items-center justify-between">
           <h3 className="text-[11px] font-bold uppercase tracking-[.1em] text-c-text-muted">Title</h3>
-          <button type="button" disabled={meta.titles_pending || working === "titles"}
+          <button type="button" disabled={asking || working === "titles"}
             onClick={() => void run("titles", onMoreTitles)}
             className="rounded-[7px] border border-c-border px-2 py-0.5 text-[11.5px] font-semibold text-c-text-secondary hover:text-c-text disabled:opacity-50">
-            {meta.titles_pending ? "Asking the AI…" : "✦ More titles"}
+            {asking ? "Asking the AI…" : "✦ More titles"}
           </button>
         </div>
-        {meta.titles_error && !meta.titles_pending && <p role="alert" className="mb-1.5 text-[11.5px] text-red-400">{meta.titles_error}</p>}
+        {meta.titles_error && !asking && <p role="alert" className="mb-1.5 text-[11.5px] text-red-400">{meta.titles_error}</p>}
         <div role="radiogroup" aria-label="Title options" className="space-y-1">
           {options.map((o) => {
             const on = o.text === title;
@@ -95,7 +96,7 @@ export function RegionPanel({ region, lines, speakers, duration, onPatch, onMore
               </button>
             );
           })}
-          {!options.length && !meta.titles_pending && (
+          {!options.length && !asking && (
             <p className="text-[12px] text-c-text-muted">No title ideas yet — ask for some, or type your own.</p>
           )}
         </div>

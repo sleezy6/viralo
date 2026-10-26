@@ -40,7 +40,7 @@ def test_video_response_studio_and_source():
                         video_metadata={"studio": {"status": "ready", "preview": "https://cdn/p.mp4"}})
     r = VideoResponse.model_validate(v)
     assert r.has_source and r.studio == {"status": "ready", "preview_url": "https://cdn/p.mp4",
-                                         "peaks_url": None, "error": None}
+                                         "peaks_url": None, "error": None, "at": None}
     v.video_metadata, v.original_storage_key = None, None
     r = VideoResponse.model_validate(v)
     assert r.studio is None and r.has_source is False

@@ -57,6 +57,8 @@ celery_app.conf.update(
         "workers.tasks.video.generate_viral_clips": {"queue": "viralo.video.ai"},
         # Studio "More titles": a quick AI call, so it doesn't wait behind renders.
         "workers.tasks.video.suggest_clip_titles": {"queue": "viralo.video.ai"},
+        # Studio preview encode: on the pipeline workers (GPU access), not behind exports.
+        "workers.tasks.video.build_video_preview": {"queue": "viralo.video.pipeline"},
         "workers.tasks.video.process_uploaded_video": {"queue": "viralo.video.pipeline"},
         "workers.tasks.video.process_youtube_video": {"queue": "viralo.video.pipeline"},
         "workers.tasks.video.upload_clip_to_storage": {"queue": "viralo.video.upload"},

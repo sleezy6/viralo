@@ -10,9 +10,10 @@ import { StudioPlayer, type StudioPlayerHandle } from "./StudioPlayer";
 import { SourceTimeline } from "./SourceTimeline";
 import { RegionList } from "./RegionList";
 import { RegionPanel } from "./RegionPanel";
-import { type CaptionLine, captionsFor, isBusy, isExported, regionOf, titleOf } from "./model";
+import { type CaptionLine, captionsFor, isBusy, isExported, keepLinks, regionOf, samePath, titleOf, titlesPending } from "./model";
 
 const NEW_CLIP_SEC = 30;
+const PREVIEW_STALE_SEC = 5 * 3600;
 
 /**
  * A project: the whole source video on one timeline with the AI's suggested clips
@@ -44,7 +45,7 @@ export function ProjectStudio({ video, onVideoChange, onBack, onNewUpload }: {
   const loadClips = useCallback(async () => {
     try {
       const res = await videoApi.clips(video.id, 1, 100, true);
-      setClips(res.items.filter((c) => c.status !== "deleted"));
+      setClips((prev) => keepLinks(prev, res.items.filter((c) => c.status !== "deleted")));
     } catch { /* keep what we have; the next poll retries */ }
     finally { setLoaded(true); }
   }, [video.id]);
@@ -53,23 +54,42 @@ export function ProjectStudio({ video, onVideoChange, onBack, onNewUpload }: {
   useEffect(() => {
     videoApi.transcript(video.id).then((r) => setWords(r.words)).catch(() => setWords([]));
   }, [video.id]);
-  const peaksUrl = video.studio?.peaks_url;
-  useEffect(() => {
-    if (!peaksUrl) return;
-    fetch(peaksUrl).then((r) => (r.ok ? r.json() : null)).then(setPeaks).catch(() => setPeaks(null));
-  }, [peaksUrl]);
+  // Signed links change on every response: keep using the same preview link (no
+  // reload, no jump back to 0) until it's a different file or the player fails with it.
+  const [previewSrc, setPreviewSrc] = useState<string | null>(video.studio?.preview_url ?? null);
+  const nextPreview = video.studio?.preview_url ?? null;
+  useEffect(() => { setPreviewSrc((p) => (samePath(p, nextPreview) ? p : nextPreview)); }, [nextPreview]);
+  const refreshedAt = useRef(0);
+  const onPreviewError = useCallback(() => {
+    if (Date.now() - refreshedAt.current < 30_000) return;  // expired link: fetch a fresh one, once
+    refreshedAt.current = Date.now();
+    videoApi.get(video.id).then((v) => { onVideoChange(v); setPreviewSrc(v.studio?.preview_url ?? null); }).catch(() => {});
+  }, [video.id, onVideoChange]);
 
-  // Projects made before the Studio: build the preview once.
-  const studioStatus = video.studio?.status ?? null;
+  const peaksPath = video.studio?.peaks_url?.split("?")[0];
   useEffect(() => {
-    if (askedPreview.current || video.studio?.preview_url || !video.has_source) return;
+    const url = video.studio?.peaks_url;
+    if (!url) return;
+    fetch(url).then((r) => (r.ok ? r.json() : null)).then(setPeaks).catch(() => setPeaks(null));
+  }, [peaksPath]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A build that never finished (its task died) counts as failed, so it can be retried.
+  const rawStatus = video.studio?.status ?? null;
+  const stale = (rawStatus === "queued" || rawStatus === "building")
+    && Date.now() / 1000 - (video.studio?.at ?? Date.now() / 1000) > PREVIEW_STALE_SEC;
+  const studioStatus = stale ? "failed" : rawStatus;
+  // A YouTube project without a stored copy can still get a preview: it's downloaded again.
+  const canPreview = Boolean(video.has_source) || video.source_type === "youtube_url";
+  // Projects made before the Studio: build the preview once.
+  useEffect(() => {
+    if (askedPreview.current || video.studio?.preview_url || !canPreview) return;
     if (studioStatus === "queued" || studioStatus === "building" || studioStatus === "failed") return;
     askedPreview.current = true;
     videoApi.studioPreview(video.id).then(onVideoChange).catch(() => {});
-  }, [video.id, video.studio?.preview_url, video.has_source, studioStatus, onVideoChange]);
+  }, [video.id, video.studio?.preview_url, canPreview, studioStatus, onVideoChange]);
 
   // Follow exports, title requests and the preview build.
-  const following = clips.some((c) => isBusy(c) || c.clip_metadata?.titles_pending);
+  const following = clips.some((c) => isBusy(c) || titlesPending(c));
   useEffect(() => {
     if (!following) return;
     const t = setInterval(() => void loadClips(), 4000);
@@ -147,8 +167,8 @@ export function ProjectStudio({ video, onVideoChange, onBack, onNewUpload }: {
   const exportedSrc = selected && isExported(selected.clip) ? selected.clip.storage_url : null;
   const previewEmpty = previewBuilding
     ? <span className="flex items-center gap-2"><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-c-border border-t-c-text-secondary" />Preparing the timeline preview…</span>
-    : !video.has_source
-      ? "The original video isn't stored, so there's no preview. Re-upload the video to edit it here."
+    : !canPreview
+      ? "The original upload isn't stored, so there's no preview. Re-upload the video to edit it here."
       : studioStatus === "failed"
         ? <span>The preview couldn't be made{video.studio?.error ? `: ${video.studio.error}` : "."}{" "}
             <button className="underline" onClick={() => { videoApi.studioPreview(video.id).then(onVideoChange).catch(() => {}); }}>Try again</button></span>
@@ -234,7 +254,7 @@ export function ProjectStudio({ video, onVideoChange, onBack, onNewUpload }: {
             ? <div className="mx-auto aspect-[9/16] max-h-[64vh] overflow-hidden rounded-[14px] border border-c-border bg-black">
                 <video key={exportedSrc} src={exportedSrc} controls playsInline className="h-full w-full object-contain" />
               </div>
-            : <StudioPlayer ref={player} src={video.studio?.preview_url ?? null}
+            : <StudioPlayer ref={player} src={previewSrc} onError={onPreviewError}
                 aspect={selected?.clip.clip_metadata?.aspect_ratio ?? video.clip_config?.aspect_ratio ?? "9:16"}
                 captions={lines} speakers={video.speakers} showCaptions={showCaptions && video.clip_config?.add_captions !== false}
                 onTime={setTime} emptyState={previewEmpty} />}

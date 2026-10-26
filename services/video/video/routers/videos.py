@@ -1188,12 +1188,19 @@ async def delete_video(
         except Exception as e:
             log.warning("Could not delete original %s: %s", original_key, e)
             freed = 0
-        if freed:
-            # The "Cloud Storage" counter counts uploaded originals.
+        if freed and video.source_type != "youtube_url":
+            # The "Cloud Storage" counter counts uploaded originals (a YouTube project's
+            # kept copy was never counted).
             try:
                 await increment_storage_used(pub_db, uuid.UUID(token.tenant_id), -freed)
             except Exception:
                 pass
+
+    # The Studio preview and waveform.
+    if os.getenv("STORAGE_PROVIDER", "local") == "local":
+        prev_dir = (storage_root / "previews" / str(uuid.UUID(token.tenant_id)) / str(video_id)).resolve()
+        if storage_root.resolve() in prev_dir.parents:
+            shutil.rmtree(prev_dir, ignore_errors=True)
 
     # Delete source/temp files
     temp_dir = Path(os.getenv("VIDEO_TEMP_DIR", "/tmp/viralo-video")) / str(video_id)

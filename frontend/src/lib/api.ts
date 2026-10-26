@@ -234,6 +234,8 @@ export interface VideoStudio {
   preview_url: string | null;
   peaks_url: string | null;
   error: string | null;
+  /** When the status last changed (unix seconds). */
+  at?: number | null;
 }
 
 /** One transcript word: [text, start, end, speaker] in seconds of the original video. */
@@ -318,6 +320,8 @@ export interface ClipApiResponse {
     /** Studio: you picked or typed the title (the AI won't replace it). */
     title_chosen?: boolean;
     titles_pending?: boolean;
+    /** When the title request started (unix seconds). */
+    titles_at?: number;
     titles_error?: string;
     /** Studio: edited captions, seconds of the original video. */
     custom_captions?: { range: [number, number]; items: Array<{ text: string; start: number; end: number }> };
@@ -399,6 +403,8 @@ function normalizePaginated<T>(data: PaginatedResponse<T> | T[] | null | undefin
 }
 
 export interface ClipConfig {
+  /** false = Studio (clips are suggestions you export); unset/true = render while processing. */
+  render_on_ingest?: boolean | null;
   max_clips?: number;
   min_score?: number;
   topic_focus?: string | null;

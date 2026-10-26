@@ -4,6 +4,7 @@ clips as regions. Suggestions are clips with status "suggested" (no video yet);
 editing them is instant and Export renders them from the stored source."""
 import json
 import logging
+import time
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -28,6 +29,8 @@ log = logging.getLogger(__name__)
 
 EXPORTABLE = ("suggested",) + tuple(_REGEN_READY_STATUSES)
 BUSY = ("regenerating", "pending_upload", "uploading")
+PREVIEW_STALE_SEC = 5 * 3600   # a preview build "queued"/"building" longer than this died
+TITLES_STALE_SEC = 20 * 60     # same for a title request
 
 
 class StudioCaption(BaseModel):
@@ -124,12 +127,15 @@ async def queue_studio_preview(video_id: uuid.UUID, token: TokenPayload = Depend
     """Build the timeline preview for a project made before the Studio existed."""
     video = await _video(db, token, video_id)
     studio = (video.video_metadata or {}).get("studio") or {}
-    if studio.get("preview") or studio.get("status") in ("queued", "building"):
+    running = (studio.get("status") in ("queued", "building")
+               and int(studio.get("at") or 0) > time.time() - PREVIEW_STALE_SEC)
+    if (studio.get("preview") and studio.get("status") == "ready") or running:
         return VideoResponse.model_validate(video)
     await db.execute(text("""
         UPDATE videos SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{studio}',
-                 COALESCE(metadata->'studio', '{}'::jsonb) || '{"status": "queued"}'::jsonb)
-         WHERE id = CAST(:v AS uuid)"""), {"v": str(video_id)})
+                 COALESCE(metadata->'studio', '{}'::jsonb) || CAST(:p AS jsonb))
+         WHERE id = CAST(:v AS uuid)"""),
+        {"v": str(video_id), "p": json.dumps({"status": "queued", "at": int(time.time()), "error": None})})
     await db.commit()
     await _set_tenant(db, token.tenant_id)
     try:
@@ -161,7 +167,8 @@ async def create_suggestion(video_id: uuid.UUID, body: SuggestionCreate,
         duration_ms=int((end - start) * 1000), platform=(cfg.get("platforms") or ["tiktok"])[0][:20],
         score=None, status="suggested",
         clip_metadata={"tier": "manual", "ai_title": "", "title_options": [], "viral_reason": "",
-                       "aspect_ratio": cfg.get("aspect_ratio", "9:16"), "titles_pending": True},
+                       "aspect_ratio": cfg.get("aspect_ratio", "9:16"), "titles_pending": True,
+                       "titles_at": int(time.time())},
     )
     db.add(clip)
     await db.commit()
@@ -183,28 +190,37 @@ async def patch_studio_clip(clip_id: uuid.UUID, body: StudioClipPatch,
                             token: TokenPayload = Depends(get_current_user),
                             db: AsyncSession = Depends(get_tenant_db)):
     """Pick a title, move the clip's start/end, or edit its captions. Instant for
-    suggestions; an exported clip is marked as needing a re-export."""
+    suggestions; an exported clip is marked as needing a re-export.
+
+    Saved as one conditional update that merges only the changed metadata keys, so it
+    can't undo a background title request or slip in after an export has started."""
     clip = await _clip(db, token, clip_id)
     if clip.status in BUSY:
         raise HTTPException(status_code=409, detail="This clip is being exported; try again when it's done.")
-    meta = dict(clip.clip_metadata or {})
+    meta = clip.clip_metadata or {}
+    patch: dict = {}
+    drop: list[str] = []
+    cols: dict = {}
     changed = False
+    start, end = float(clip.start_sec or 0), float(clip.end_sec or 0)
     if body.title is not None:
         title = " ".join(body.title.split())[:100]
         if not title:
             raise HTTPException(status_code=422, detail="The title can't be empty.")
-        if title != (meta.get("ai_title") or clip.title):
-            changed = True
-        clip.title, meta["ai_title"], meta["title_chosen"] = title, title, True
+        changed = changed or title != (meta.get("ai_title") or clip.title)
+        patch.update(ai_title=title, title_chosen=True)
+        cols["title"] = title
     if body.start_sec is not None or body.end_sec is not None:
         video = (await db.execute(select(Video).where(Video.id == clip.video_id))).scalar_one()
-        start = body.start_sec if body.start_sec is not None else float(clip.start_sec or 0)
-        end = body.end_sec if body.end_sec is not None else float(clip.end_sec or 0)
-        start, end = _check_range(start, end, video.duration_sec)
-        if (start, end) != (float(clip.start_sec or 0), float(clip.end_sec or 0)):
+        # duration_sec is whole seconds; a clip may already end in the last partial one.
+        duration = max(float(video.duration_sec or 0), end) or None
+        ns, ne = _check_range(body.start_sec if body.start_sec is not None else start,
+                              body.end_sec if body.end_sec is not None else end, duration)
+        if (ns, ne) != (start, end):
             changed = True
-            clip.start_sec, clip.end_sec = start, end
-            clip.start_ms, clip.end_ms, clip.duration_ms = int(start * 1000), int(end * 1000), int((end - start) * 1000)
+            start, end = ns, ne
+            cols.update(start_sec=start, end_sec=end, start_ms=int(start * 1000), end_ms=int(end * 1000),
+                        duration_ms=int((end - start) * 1000))
     if body.captions is not None:
         items = []
         for c in body.captions:
@@ -212,14 +228,28 @@ async def patch_studio_clip(clip_id: uuid.UUID, body: StudioClipPatch,
             if t and c.end_sec - c.start_sec >= 0.05:
                 items.append({"text": t, "start": round(c.start_sec, 3), "end": round(c.end_sec, 3)})
         items.sort(key=lambda it: it["start"])
+        # The range is the whole clip as it was edited: a line the user emptied stays
+        # gone instead of the transcript filling it back in.
         if items:
-            meta["custom_captions"] = {"range": [items[0]["start"], items[-1]["end"]], "items": items}
+            patch["custom_captions"] = {"range": [start, end], "items": items}
         else:
-            meta.pop("custom_captions", None)
+            drop.append("custom_captions")
         changed = True
     if changed and clip.storage_url:
-        meta["dirty"] = True
-    clip.clip_metadata = meta
+        patch["dirty"] = True
+    sets = ", ".join(f"{k} = :{k}" for k in cols)
+    row = (await db.execute(text(f"""
+        UPDATE clips
+           SET metadata = (COALESCE(metadata, '{{}}'::jsonb) - CAST(:drop AS text[])) || CAST(:patch AS jsonb),
+               {sets + ", " if sets else ""}updated_at = NOW()
+         WHERE id = CAST(:id AS uuid) AND tenant_id = CAST(:t AS uuid)
+           AND status <> ALL(CAST(:busy AS text[])) AND status <> 'deleted'
+        RETURNING id
+    """), {**cols, "id": str(clip_id), "t": token.tenant_id, "drop": drop, "patch": json.dumps(patch),
+           "busy": list(BUSY)})).fetchone()
+    if not row:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="This clip is being exported; try again when it's done.")
     await db.commit()
     await _set_tenant(db, token.tenant_id)
     await db.refresh(clip)
@@ -231,22 +261,29 @@ async def request_titles(clip_id: uuid.UUID, token: TokenPayload = Depends(get_c
                          db: AsyncSession = Depends(get_tenant_db)):
     """Ask the AI for more title options (added to the list; the chosen title stays)."""
     clip = await _clip(db, token, clip_id)
-    meta = dict(clip.clip_metadata or {})
-    if meta.get("titles_pending"):
-        return clip
-    meta.pop("titles_error", None)
-    clip.clip_metadata = {**meta, "titles_pending": True}
+    now = int(time.time())
+    claimed = (await db.execute(text("""
+        UPDATE clips
+           SET metadata = (COALESCE(metadata, '{}'::jsonb) - 'titles_error')
+                          || jsonb_build_object('titles_pending', true, 'titles_at', CAST(:now AS bigint))
+         WHERE id = CAST(:id AS uuid) AND tenant_id = CAST(:t AS uuid)
+           AND NOT (COALESCE(metadata->>'titles_pending', 'false') = 'true'
+                    AND COALESCE((metadata->>'titles_at')::bigint, 0) > :fresh)
+        RETURNING id
+    """), {"id": str(clip_id), "t": token.tenant_id, "now": now, "fresh": now - TITLES_STALE_SEC})).fetchone()
     await db.commit()
     await _set_tenant(db, token.tenant_id)
-    try:
-        _get_celery().send_task("workers.tasks.video.suggest_clip_titles",
-                                args=[str(uuid.UUID(token.tenant_id)), str(clip_id)])
-    except Exception as e:
-        log.error("Could not queue titles for %s: %s", clip_id, e)
-        clip.clip_metadata = meta
-        await db.commit()
-        await _set_tenant(db, token.tenant_id)
-        raise HTTPException(status_code=503, detail="Couldn't ask the AI (the task queue isn't reachable).")
+    if claimed:
+        try:
+            _get_celery().send_task("workers.tasks.video.suggest_clip_titles",
+                                    args=[str(uuid.UUID(token.tenant_id)), str(clip_id)])
+        except Exception as e:
+            log.error("Could not queue titles for %s: %s", clip_id, e)
+            await db.execute(text("UPDATE clips SET metadata = metadata - 'titles_pending' WHERE id = CAST(:id AS uuid)"),
+                             {"id": str(clip_id)})
+            await db.commit()
+            await _set_tenant(db, token.tenant_id)
+            raise HTTPException(status_code=503, detail="Couldn't ask the AI (the task queue isn't reachable).")
     await db.refresh(clip)
     return clip
 
