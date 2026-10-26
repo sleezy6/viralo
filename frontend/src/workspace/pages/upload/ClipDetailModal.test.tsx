@@ -118,4 +118,23 @@ describe("ClipDetailModal", () => {
     expect(container.querySelector("#clip-detail-panel-copy")?.getAttribute("role")).toBe("tabpanel");
     expect(container.querySelector("#clip-detail-panel-info")).toBeNull();
   });
+
+  it("the edit button closes the window and opens the editor", async () => {
+    const onEdit = vi.fn(); const onClose = vi.fn();
+    await act(async () => { root.render(<ClipDetailModal clip={makeClip()} onClose={onClose} onEdit={onEdit} />); });
+    const btn = container.querySelector<HTMLButtonElement>('[aria-label="Edit clip"]')!;
+    expect(btn.disabled).toBe(false);
+    await act(async () => { btn.click(); });
+    expect(onClose).toHaveBeenCalled();
+    expect(onEdit).toHaveBeenCalled();
+  });
+
+  it("no dead edit button: hidden without an editor, disabled while the clip is busy", async () => {
+    await act(async () => { root.render(<ClipDetailModal clip={makeClip()} onClose={() => {}} />); });
+    expect(container.querySelector('[aria-label="Edit clip"]')).toBeNull();
+    await act(async () => {
+      root.render(<ClipDetailModal clip={{ ...makeClip(), status: "regenerating" }} onClose={() => {}} onEdit={() => {}} />);
+    });
+    expect(container.querySelector<HTMLButtonElement>('[aria-label="Edit clip"]')!.disabled).toBe(true);
+  });
 });

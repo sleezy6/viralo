@@ -24,13 +24,15 @@ export { PLAT_DISPLAY, PlatPill, VirChip };
 
 import { useRef, useCallback, useEffect } from "react";
 
-export function ClipDetailModal({ clip, isPosted, isScheduled, posts = [], onClose, onPublish }: {
+export function ClipDetailModal({ clip, isPosted, isScheduled, posts = [], onClose, onPublish, onEdit }: {
   clip: ClipApiResponse;
   isPosted?: boolean;
   isScheduled?: boolean;
   posts?: ScheduledPostSummary[];
   onClose: () => void;
   onPublish?: () => void;
+  /** Opens the video editor for this clip (the window closes first). */
+  onEdit?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
@@ -474,12 +476,17 @@ export function ClipDetailModal({ clip, isPosted, isScheduled, posts = [], onClo
                 <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
                 {isPosted ? "Publish again" : isScheduled ? "Reschedule" : "Publish"}
               </button>
+              {onEdit && (
               <button
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] border border-c-border bg-surface-2 text-c-text-secondary transition hover:border-c-border-hover hover:bg-surface-3 hover:text-c-text cursor-pointer"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] border border-c-border bg-surface-2 text-c-text-secondary transition hover:border-c-border-hover hover:bg-surface-3 hover:text-c-text cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                 aria-label="Edit clip"
+                title="Open in the editor"
+                disabled={!clip.storage_url || CLIP_BUSY_STATUSES.includes(clip.status)}
+                onClick={() => { onClose(); onEdit(); }}
               >
                 <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
               </button>
+              )}
               <button
                 className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] border border-c-border bg-surface-2 text-c-text-secondary transition hover:border-c-border-hover hover:bg-surface-3 hover:text-c-text cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                 disabled={!clip.storage_url}

@@ -7,6 +7,7 @@ import { videoApi, type VideoResponse, type ClipApiResponse, type ScheduledPostS
 import { VirtualizedGrid } from "../../components/VirtualizedCollection";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ClipCard, ClipDetailModal } from "./ClipCard";
+import { VideoEditor } from "../../components/VideoEditor";
 import { RegenerateDialog, CLIP_BUSY_STATUSES } from "./RegenerateDialog";
 import { BulkPublishModal } from "./BulkPublishModal";
 import { gradFromId } from "./helpers";
@@ -377,6 +378,7 @@ export function ResultsView({
   const [zipModal, setZipModal] = useState(false);
   const [publishFilter, setPublishFilter] = useState<"all" | "posted" | "queued" | "unposted">("all");
   const [detailClip, setDetailClip] = useState<ClipApiResponse | null>(null);
+  const [editClip, setEditClip] = useState<ClipApiResponse | null>(null);
   const [singlePublishClip, setSinglePublishClip] = useState<ClipApiResponse | null>(null);
   const toggleSelect = (id: string) =>
     setSelected((prev) => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
@@ -603,6 +605,16 @@ export function ResultsView({
           posts={postsByClipId.get(detailClip.id) ?? []}
           onClose={() => setDetailClip(null)}
           onPublish={() => { setDetailClip(null); setSinglePublishClip(detailClip); }}
+          onEdit={() => setEditClip(clips.find((c) => c.id === detailClip.id) ?? detailClip)}
+        />
+      )}
+
+      {editClip && (
+        <VideoEditor
+          clip={editClip}
+          onClose={() => setEditClip(null)}
+          onPost={() => setSinglePublishClip(editClip)}
+          onApplied={(updated) => { onClipsChange?.(clips.map((c) => c.id === updated.id ? updated : c)); void refreshClips(); }}
         />
       )}
     </div>
