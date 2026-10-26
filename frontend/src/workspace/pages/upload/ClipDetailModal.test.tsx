@@ -1,3 +1,4 @@
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): larger details window.
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
@@ -78,7 +79,8 @@ describe("ClipDetailModal", () => {
     const shell = container.querySelector('[data-testid="clip-detail-modal"]');
     expect(shell).toBeTruthy();
     expect(shell?.className).toContain("flex-col");
-    expect(shell?.className).toContain("md:grid-cols-[minmax(0,300px)_minmax(0,1fr)]");
+    expect(shell?.className).toContain("md:grid-cols-[minmax(0,min(380px,calc(90vh*0.5625)))_minmax(0,1fr)]");
+    expect(shell?.className).toContain("lg:grid-cols-[minmax(0,min(500px,calc(90vh*0.5625)))_minmax(0,1fr)]");
     expect(shell?.getAttribute("style") ?? "").not.toContain("gridTemplateColumns");
   });
 
