@@ -311,12 +311,48 @@ def _translate_chunk(groq_client, audio_bytes: bytes, filename: str, offset: flo
 
 # Models (by name) whose server refused timestamped output without a language.
 _NEEDS_LANGUAGE: set[str] = set()
+# Models whose server rejected the transcription "prompt" field (sent without it since).
+_PROMPT_REJECTED: set[str] = set()
+_LOGGED_NO_SPEAKERS: set[str] = set()
+
+# MOSS-Transcribe-Diarize's own default instruction (from its model card): transcribe
+# into segments that each start with a timestamp and a speaker label ([S01], [S02]…)
+# and end with a timestamp. With a generic instruction the model may skip the speaker
+# labels. Sent as the transcription "prompt"; servers that ignore it are unaffected.
+MOSS_DIARIZE_PROMPT = ("请将音频转写为文本，每一段需以起始时间戳和说话人编号（[S01]、[S02]、[S03]…）开头，"
+                       "正文为对应的语音内容，并在段末标注结束时间戳，以清晰标明该段语音范围。")
+
+
+def _local_stt_prompt(model: str) -> str | None:
+    """LOCAL_STT_PROMPT: a custom instruction, "off" for none, or unset for the
+    model's own diarization instruction when the model is MOSS-Transcribe-Diarize."""
+    val = os.getenv("LOCAL_STT_PROMPT")
+    if val is not None and val.strip():
+        return None if val.strip().lower() in ("off", "none", "0", "false") else val.strip()
+    return MOSS_DIARIZE_PROMPT if "moss" in (model or "").lower() else None
+
+
+def _stt_create(client, model: str, prompt: str | None, **kw):
+    """transcriptions.create, with the prompt if one is set — and without it (for this
+    model from then on) if the server refuses the field."""
+    if prompt and model not in _PROMPT_REJECTED:
+        try:
+            return client.audio.transcriptions.create(model=model, prompt=prompt, **kw)
+        except SoftTimeLimitExceeded:
+            raise
+        except Exception as e:
+            if "prompt" not in str(e).lower():
+                raise
+            _PROMPT_REJECTED.add(model)
+            logging.warning(f"[Whisper] {model}: server refused the prompt field, sending without it: {str(e)[:160]}")
+    return client.audio.transcriptions.create(model=model, **kw)
 
 
 def _transcribe_chunk(groq_client, audio_bytes: bytes, filename: str, offset: float, language: str,
                       model: str = GROQ_WHISPER_MODEL,
                       chunk_dur: float | None = None,
-                      fallback_language: str | None = None) -> tuple[list[WordTimestamp], str]:
+                      fallback_language: str | None = None,
+                      prompt: str | None = None) -> tuple[list[WordTimestamp], str]:
     """Returns (words, detected_language). detected_language is ISO 639-1 or empty string.
 
     Timing sources, best first: per-word timestamps → segment timestamps split across
@@ -336,9 +372,9 @@ def _transcribe_chunk(groq_client, audio_bytes: bytes, filename: str, offset: fl
     attempts = [(first_lang, g) for g in (["word", "segment"], ["segment"])]
     for try_lang, granularities in attempts:
         try:
-            response = groq_client.audio.transcriptions.create(
+            response = _stt_create(
+                groq_client, model, prompt,
                 file=(filename, audio_bytes),
-                model=model,
                 language=try_lang,
                 response_format="verbose_json",
                 timestamp_granularities=granularities,
@@ -364,6 +400,15 @@ def _transcribe_chunk(groq_client, audio_bytes: bytes, filename: str, offset: fl
         has_words = bool(getattr(response, "words", None)) or any(
             _get_attr(seg, "words") for seg in (getattr(response, "segments", None) or []))
         words = _parse_words(response, offset)
+        if words and prompt and not any(w.speaker for w in words) and model not in _LOGGED_NO_SPEAKERS:
+            # Once per model: show what came back, to see how (or whether) speakers arrive.
+            _LOGGED_NO_SPEAKERS.add(model)
+            segs = getattr(response, "segments", None) or []
+            first = segs[0] if segs else None
+            sample = (_get_attr(first, "text") if first is not None else getattr(response, "text", "")) or ""
+            keys = sorted(first.keys()) if isinstance(first, dict) else sorted(getattr(first, "__dict__", {}) or [])
+            logging.info(f"[Whisper] {model}: no speaker labels in the response. First segment "
+                         f"fields={keys} text={sample[:300]!r}")
         if words:
             logging.info(f"[Whisper] {model}: {len(words)} words, timing from "
                          f"{'word timestamps' if has_words else 'segment timestamps (estimated per word)'}")
@@ -371,9 +416,9 @@ def _transcribe_chunk(groq_client, audio_bytes: bytes, filename: str, offset: fl
         logging.warning(f"[Whisper] {model}: verbose_json response had no words or segments")
 
     try:
-        response = groq_client.audio.transcriptions.create(
+        response = _stt_create(
+            groq_client, model, prompt,
             file=(filename, audio_bytes),
-            model=model,
             language=lang,
             response_format="json",
         )
@@ -450,7 +495,8 @@ def _transcribe(source_path: str, duration: float, language: str = "auto",
                 req_lang = language if language != "auto" else (b.get("default_language") or "auto")
                 words, chunk_lang = _transcribe_chunk(client, audio_bytes, fname, offset, req_lang,
                                                       b["model"], chunk_dur=max(next_off - offset, 0.0),
-                                                      fallback_language=b.get("fallback_language"))
+                                                      fallback_language=b.get("fallback_language"),
+                                                      prompt=b.get("prompt"))
                 # Use first chunk's detected language (most reliable — full audio context)
                 if not detected_lang and chunk_lang:
                     detected_lang = chunk_lang
@@ -544,6 +590,8 @@ def _stt_backends() -> list[dict]:
             "default_language": _local_stt_language(),
             "fallback_language": "en",
             "local": True,
+            # The model's own diarization instruction (MOSS), or LOCAL_STT_PROMPT.
+            "prompt": _local_stt_prompt(model),
         })
 
     groq_keys: list[str] = []

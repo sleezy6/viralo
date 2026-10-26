@@ -163,6 +163,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+      LOCAL_STT_PROMPT: ${LOCAL_STT_PROMPT:-}
     init: true
   gateway:
     image: ghcr.io/sleezy6/viralo-gateway:latest
@@ -249,6 +250,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+      LOCAL_STT_PROMPT: ${LOCAL_STT_PROMPT:-}
     init: true
   video-service:
     image: ghcr.io/sleezy6/viralo-video:latest
@@ -313,6 +315,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+      LOCAL_STT_PROMPT: ${LOCAL_STT_PROMPT:-}
       YTDLP_COOKIES_FILE: ''
       YTDLP_PROXY: ${YTDLP_PROXY:-}
       YTDLP_PROXY_LIST: ${YTDLP_PROXY_LIST:-}
@@ -413,6 +416,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+      LOCAL_STT_PROMPT: ${LOCAL_STT_PROMPT:-}
     init: true
   workflow-service:
     image: ghcr.io/sleezy6/viralo-workflow:latest
@@ -490,6 +494,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+      LOCAL_STT_PROMPT: ${LOCAL_STT_PROMPT:-}
     init: true
   platform-service:
     image: ghcr.io/sleezy6/viralo-platform:latest
@@ -581,6 +586,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+      LOCAL_STT_PROMPT: ${LOCAL_STT_PROMPT:-}
     init: true
   bgutil-pot:
     image: brainicism/bgutil-ytdlp-pot-provider:1.3.1
@@ -668,6 +674,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+      LOCAL_STT_PROMPT: ${LOCAL_STT_PROMPT:-}
       YTDLP_COOKIES_FILE: ''
       YTDLP_PROXY: ${YTDLP_PROXY:-}
       YTDLP_PROXY_LIST: ${YTDLP_PROXY_LIST:-}
@@ -762,6 +769,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+      LOCAL_STT_PROMPT: ${LOCAL_STT_PROMPT:-}
       YTDLP_COOKIES_FILE: ''
       YTDLP_PROXY: ${YTDLP_PROXY:-}
       YTDLP_PROXY_LIST: ${YTDLP_PROXY_LIST:-}
@@ -850,6 +858,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+      LOCAL_STT_PROMPT: ${LOCAL_STT_PROMPT:-}
       YTDLP_COOKIES_FILE: ''
       YTDLP_PROXY: ${YTDLP_PROXY:-}
       YTDLP_PROXY_LIST: ${YTDLP_PROXY_LIST:-}
@@ -943,6 +952,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+      LOCAL_STT_PROMPT: ${LOCAL_STT_PROMPT:-}
       YTDLP_COOKIES_FILE: ''
       YTDLP_PROXY: ${YTDLP_PROXY:-}
       YTDLP_PROXY_LIST: ${YTDLP_PROXY_LIST:-}
@@ -1055,6 +1065,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+      LOCAL_STT_PROMPT: ${LOCAL_STT_PROMPT:-}
     init: true
   celery-workflow:
     image: ghcr.io/sleezy6/viralo-workflow:latest
@@ -1141,6 +1152,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+      LOCAL_STT_PROMPT: ${LOCAL_STT_PROMPT:-}
     init: true
   celery-post:
     image: ghcr.io/sleezy6/viralo-platform:latest
@@ -1243,6 +1255,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+      LOCAL_STT_PROMPT: ${LOCAL_STT_PROMPT:-}
     init: true
   celery-notification:
     image: ghcr.io/sleezy6/viralo-platform:latest
@@ -1329,6 +1342,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+      LOCAL_STT_PROMPT: ${LOCAL_STT_PROMPT:-}
     init: true
   celery-beat:
     image: ghcr.io/sleezy6/viralo-core:latest
@@ -1416,6 +1430,7 @@ services:
       LOCAL_LLM_EXTRA_BODY: ${LOCAL_LLM_EXTRA_BODY:-}
       LOCAL_STT_TIMEOUT: ${LOCAL_STT_TIMEOUT:-900}
       LOCAL_STT_LANGUAGE: ${LOCAL_STT_LANGUAGE:-en}
+      LOCAL_STT_PROMPT: ${LOCAL_STT_PROMPT:-}
     init: true
 networks:
   viralo-internal:
