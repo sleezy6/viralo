@@ -1,10 +1,11 @@
-// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): clip refresh for Regenerate.
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): projects open in the Studio.
 import { useState, useEffect, useRef, useCallback } from "react";
 import { navigate } from "@/lib/router";
-import { videoApi, token as authToken, API_BASES, type VideoResponse, type ClipApiResponse, type ClipConfig } from "@/lib/api";
+import { videoApi, token as authToken, API_BASES, type VideoResponse, type ClipConfig } from "@/lib/api";
 import { DEFAULT_CONFIG } from "./upload/constants";
 import { ProcessingView } from "./upload/ProcessingView";
-import { ResultsView, DeleteModal } from "./upload/ResultsView";
+import { DeleteModal } from "./studio/common";
+import { ProjectStudio } from "./studio/ProjectStudio";
 
 export { DEFAULT_CONFIG } from "./upload/constants";
 
@@ -19,7 +20,6 @@ export function UploadPage() {
   const [uploadStep, setUploadStep] = useState(1);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [activeVideo, setActiveVideo] = useState<VideoResponse | null>(null);
-  const [clips, setClips] = useState<ClipApiResponse[]>([]);
   const [drag, setDrag] = useState(false);
   const [urlVal, setUrlVal] = useState("");
   const [urlReady, setUrlReady] = useState(false);
@@ -147,13 +147,8 @@ export function UploadPage() {
 
   const handleDone = useCallback(async (updated: VideoResponse) => {
     setHistory((h) => h.map((v) => v.id === updated.id ? updated : v));
-    setActiveVideo(updated);
-    if (updated.status === "done" || updated.status === "ready") {
-      try {
-        const clipList = await videoApi.clips(updated.id);
-        setClips(clipList.items);
-      } catch { setClips([]); }
-    }
+    // The finished project (with its Studio preview info), not the progress snapshot.
+    setActiveVideo(await videoApi.get(updated.id).catch(() => updated));
     setView("results");
   }, []);
 
@@ -164,12 +159,6 @@ export function UploadPage() {
       return;
     }
     setActiveVideo(vid);
-    if (vid.status === "done" || vid.status === "ready") {
-      try {
-        const clipList = await videoApi.clips(vid.id);
-        setClips(clipList.items);
-      } catch { setClips([]); }
-    }
     setView("results");
   }, []);
 
@@ -202,7 +191,6 @@ export function UploadPage() {
       setHistory((h) => h.filter((v) => v.id !== vid.id));
       if (activeVideo?.id === vid.id) {
         setActiveVideo(null);
-        setClips([]);
         setView("upload");
       }
     } catch { /* ignore — leave in list */ }
@@ -292,12 +280,10 @@ export function UploadPage() {
                   try { await videoApi.cancel(activeVideo.id); } catch { /* ignore */ }
                   setView("upload");
                   setActiveVideo(null);
-                  setClips([]);
                 }}
                 onNewUpload={() => {
                   setView("upload");
                   setActiveVideo(null);
-                  setClips([]);
                   setUploadError("");
                   setUploadStep(1);
                   setPendingFile(null);
@@ -305,7 +291,6 @@ export function UploadPage() {
                 onUploadFileInstead={() => {
                   setView("upload");
                   setActiveVideo(null);
-                  setClips([]);
                   setUploadError("");
                   setUploadStep(1);
                   setPendingFile(null);
@@ -320,10 +305,8 @@ export function UploadPage() {
 
           {view === "results" && activeVideo && (
             <div className="h-full overflow-y-auto">
-              <ResultsView
+              <ProjectStudio
                 video={activeVideo}
-                clips={clips}
-                onClipsChange={setClips}
                 onVideoChange={setActiveVideo}
                 onBack={() => navigate("/projects")}
                 onNewUpload={() => navigate("/studio")}

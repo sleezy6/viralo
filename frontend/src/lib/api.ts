@@ -223,7 +223,23 @@ export interface VideoResponse {
   game?: VideoGame | null;
   /** Speakers from the transcript, with names and caption colours. */
   speakers?: VideoSpeakers | null;
+  /** Studio timeline preview (whole source, no burned captions) and waveform. */
+  studio?: VideoStudio | null;
+  /** Whether the original video is stored (exports and the preview are made from it). */
+  has_source?: boolean;
 }
+
+export interface VideoStudio {
+  status: "queued" | "building" | "ready" | "failed" | null;
+  preview_url: string | null;
+  peaks_url: string | null;
+  error: string | null;
+}
+
+/** One transcript word: [text, start, end, speaker] in seconds of the original video. */
+export type TranscriptWord = [string, number, number, string | null];
+
+export interface TitleOption { text: string; score: number | null; hook_type: string | null }
 
 export interface VideoGame {
   name: string;
@@ -295,6 +311,18 @@ export interface ClipApiResponse {
     editor?: EditorData;
     /** Set when the last Regenerate failed for this clip (cleared on success). */
     regenerate_error?: string;
+    /** Studio: the AI's title options, best first. */
+    title_options?: TitleOption[];
+    /** Studio: "top" = AI pick, "runner_up" = another idea, "manual" = added by you. */
+    tier?: "top" | "runner_up" | "manual";
+    /** Studio: you picked or typed the title (the AI won't replace it). */
+    title_chosen?: boolean;
+    titles_pending?: boolean;
+    titles_error?: string;
+    /** Studio: edited captions, seconds of the original video. */
+    custom_captions?: { range: [number, number]; items: Array<{ text: string; start: number; end: number }> };
+    /** Studio: edited since it was exported — export again to update the video. */
+    dirty?: boolean;
   } | null;
   upload_attempts: number | null;
   upload_error: string | null;
@@ -478,9 +506,29 @@ export const videoApi = {
   listClipping: (page = 1, per_page = 20) =>
     videoReq<VideoListResponse | VideoResponse[]>("GET", `/videos/clipping?page=${page}&per_page=${per_page}`)
       .then((data) => normalizePaginated<VideoResponse>(data, page, per_page)),
-  clips:   (videoId: string, page = 1, per_page = 100) =>
-    videoReq<ClipListResponse | ClipApiResponse[]>("GET", `/clips?video_id=${videoId}&page=${page}&per_page=${per_page}`)
+  clips:   (videoId: string, page = 1, per_page = 100, includeSuggested = false) =>
+    videoReq<ClipListResponse | ClipApiResponse[]>("GET", `/clips?video_id=${videoId}&page=${page}&per_page=${per_page}${includeSuggested ? "&include_suggested=true" : ""}`)
       .then((data) => normalizePaginated<ClipApiResponse>(data, page, per_page)),
+  /* ── Project Studio ── */
+  /** Every word of the video with timings and speakers (seconds of the original). */
+  transcript: (videoId: string) =>
+    videoReq<{ words: TranscriptWord[] }>("GET", `/videos/${videoId}/transcript`),
+  /** Build the timeline preview for a project made before the Studio. */
+  studioPreview: (videoId: string) => videoReq<VideoResponse>("POST", `/videos/${videoId}/studio-preview`),
+  /** A clip of your own on the timeline (seconds of the original). */
+  addSuggestion: (videoId: string, start_sec: number, end_sec: number) =>
+    videoReq<ClipApiResponse>("POST", `/videos/${videoId}/suggestions`, { start_sec, end_sec }),
+  /** Pick a title, move start/end, or set the captions (seconds of the original; [] = transcript). */
+  studioPatch: (clipId: string, body: { title?: string; start_sec?: number; end_sec?: number;
+    captions?: Array<{ text: string; start_sec: number; end_sec: number }> }) =>
+    videoReq<ClipApiResponse>("PATCH", `/clips/${clipId}/studio`, body),
+  /** Delete one clip or suggestion. */
+  deleteClip: (clipId: string) => videoReq<void>("DELETE", `/clips/${clipId}`),
+  /** Ask the AI for more title options. */
+  moreTitles: (clipId: string) => videoReq<ClipApiResponse>("POST", `/clips/${clipId}/titles`),
+  /** Render these clips (suggestions, or exported clips again after edits). */
+  exportClips: (videoId: string, clipIds: string[]) =>
+    videoReq<{ queued: number; clip_ids: string[] }>("POST", `/videos/${videoId}/export`, { clip_ids: clipIds }),
   listClips: (page = 1, per_page = 24, minViralityScore?: number, sortBy?: "created_at" | "score") => {
     const qs = new URLSearchParams({ page: String(page), per_page: String(per_page) });
     if (minViralityScore !== undefined) qs.set("min_virality_score", String(minViralityScore));

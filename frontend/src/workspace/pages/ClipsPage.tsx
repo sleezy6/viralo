@@ -1,6 +1,7 @@
 // Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): editor Apply to clip; regenerate state;
 // publish dialog above the sidebar.
-import { CLIP_BUSY_STATUSES } from "./upload/RegenerateDialog";
+import { BUSY as CLIP_BUSY_STATUSES } from "./studio/model";
+import { navigate } from "@/lib/router";
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import { createPortal } from "react-dom";
 import { Badge } from "@/components/ui/badge";
@@ -11,7 +12,6 @@ import { UniversalClipCard } from "../components/UniversalClipCard";
 import { VirtualizedGrid, VirtualizedList } from "../components/VirtualizedCollection";
 import { Pagination } from "../components/Pagination";
 import { videoApi, platformApi, agentApi, token, API_BASES, type ClipApiResponse, type ScheduledPost, type ScheduledPostSummary, SocialAccount, type TagSuggestResponse } from "@/lib/api";
-import { VideoEditor } from "../components/VideoEditor";
 import { addToast } from "@/stores/notifications";
 import { datetimeLocalToUtcIso } from "@/lib/datetimeLocal";
 
@@ -612,7 +612,6 @@ export function ClipsPage() {
   const [page, setPage] = useState(1);
   const [totalClips, setTotalClips] = useState(0);
   const perPage = 9;
-  const [editClip, setEditClip] = useState<ClipApiResponse | null>(null);
   const [failedPostBanner, setFailedPostBanner] = useState<string | null>(null);
   const [upscalingId, setUpscalingId] = useState<string | null>(null);
   const [compareView, setCompareView] = useState<string | null>(null); // clip id with compare open
@@ -1369,7 +1368,7 @@ export function ClipsPage() {
                       {drawerPosted ? "Publish again" : drawerScheduled ? "Reschedule" : "Publish"}
                     </Button>
                     <div className="grid grid-cols-2 gap-2">
-                      <Button className="h-8 text-[12px]" variant="secondary" onClick={() => setEditClip(drawer)}>Edit clip</Button>
+                      <Button className="h-8 text-[12px]" variant="secondary" onClick={() => navigate(`/projects/${drawer.video_id}?clip=${drawer.id}`)}>Edit in Studio</Button>
                       <Button
                         className="h-8 text-[12px]"
                         variant="ghost"
@@ -1407,14 +1406,6 @@ export function ClipsPage() {
         </div>
       </div>
       {publishOpen && drawer && <PublishModal clip={drawer} onClose={() => setPublishOpen(false)} />}
-      {editClip && (
-        <VideoEditor
-          clip={editClip}
-          onClose={() => setEditClip(null)}
-          onApplied={(updated) => setClips((prev) => prev.map((c) => c.id === updated.id ? updated : c))}
-          onPost={() => { setSelectedId(editClip.id); setPublishOpen(true); setEditClip(null); }}
-        />
-      )}
     </>
   );
 }
