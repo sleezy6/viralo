@@ -107,10 +107,20 @@ def test_pipeline_studio_mode_stores_suggestions_without_rendering(tmp_path):
     )
     with patch.multiple(pl, **names), \
          patch("workers.tasks.video.game_context._resolve_video_game", return_value=None), \
-         patch("workers.tasks.video.suggestions.keep_source_copy") as keep:
+         patch("workers.tasks.video.suggestions.keep_source_copy") as keep, \
+         patch("workers.tasks.video.preview.build_preview_assets") as preview:
         pl.run_video_pipeline("t", "v", "/src.mp4", "job", {"max_clips": 2, "duration_min": 15,
                                                           "duration_max": 60})
     assert [c.title for c in stored["picks"]] == ["A", "B"]
     assert [c.title for c in stored["runners"]] == ["R"]
     keep.assert_called_once()
+    preview.assert_called_once()
     finish.assert_called_once()
+
+
+def test_compute_peaks_normalizes():
+    import array
+    from workers.tasks.video.preview import compute_peaks
+    pcm = array.array("h", [0, 1000, -2000, 0] * 100 + [0] * 400).tobytes()
+    out = compute_peaks(pcm, rate=400, per_sec=2)
+    assert out[0] == 100 and out[-1] == 0 and len(out) == 4

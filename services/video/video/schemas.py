@@ -205,9 +205,32 @@ class VideoResponse(BaseModel):
     # Speakers found in the transcript, with the user's names and caption colours:
     # {"colors": bool, "list": [{"id", "name", "color"}]} (videos.metadata->'speakers').
     speakers: dict | None = Field(default=None, validation_alias="video_metadata")
+    # Studio timeline preview: {"status", "preview_url", "peaks_url", "error"} (videos.metadata->'studio').
+    studio: dict | None = Field(default=None, validation_alias="video_metadata")
+    # Whether the original is stored (exports and the preview can be made from it).
+    has_source: bool = Field(default=False, validation_alias="original_storage_key")
     model_config = {"from_attributes": True}
 
     _sign_media = field_validator("storage_url", "thumbnail_url", mode="before")(sign_media_url)
+
+    @field_validator("has_source", mode="before")
+    @classmethod
+    def _has_source(cls, value: Any) -> bool:
+        return bool(value)
+
+    @field_validator("studio", mode="before")
+    @classmethod
+    def _studio_from_metadata(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                return None
+        st = value.get("studio") if isinstance(value, dict) else None
+        if not isinstance(st, dict):
+            return None
+        return {"status": st.get("status"), "preview_url": sign_media_url(st.get("preview")),
+                "peaks_url": sign_media_url(st.get("peaks")), "error": st.get("error")}
 
     @field_validator("speakers", mode="before")
     @classmethod

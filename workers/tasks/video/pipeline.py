@@ -390,9 +390,18 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
         "fps": meta.fps, "codec": meta.codec,
     })
 
+    _preview_thread = None
     if not (cfg.get("auto_publish") or cfg.get("render_on_ingest")):
+        # Studio: keep the source for later exports, and build the timeline preview
+        # (proxy + waveform) alongside transcription and scoring.
+        import threading
+        from workers.tasks.video.preview import build_preview_assets
         from workers.tasks.video.suggestions import keep_source_copy
         keep_source_copy(tenant_id, video_id, source_path)
+        _preview_thread = threading.Thread(
+            target=build_preview_assets, name=f"preview-{video_id}", daemon=True,
+            args=(tenant_id, video_id, source_path, meta.fps, meta.has_audio))
+        _preview_thread.start()
 
     # Stage 4b: Scene frame extraction
     _publish_progress(job_id, "scene_extraction", 12, "processing", "Extracting scene frames…")
@@ -602,6 +611,9 @@ def run_video_pipeline(tenant_id: str, video_id: str, source_path: str, job_id: 
     )
 
     if studio_mode:
+        if _preview_thread is not None and _preview_thread.is_alive():
+            _publish_progress(job_id, "export", 75, "processing", "Finishing the timeline preview…")
+            _preview_thread.join()
         clip_ids = _store_suggestions(
             tenant_id, video_id, job_id, clips, runners_up, all_ai_content, source_path,
             work_dir, cfg, words, _occasion, _viral_type, words_per_line)

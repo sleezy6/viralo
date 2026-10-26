@@ -1813,7 +1813,8 @@ async def _set_tenant(db: AsyncSession, tenant_id) -> None:
 
 
 async def _claim_and_queue(db: AsyncSession, tenant_id: str, video_id: str, clips: list[Clip],
-                           mode: str, timing: dict | None = None) -> list[str]:
+                           mode: str, timing: dict | None = None,
+                           allowed: tuple[str, ...] = _REGEN_READY_STATUSES) -> list[str]:
     """Mark clips "regenerating" and queue the job.
 
     The claim is one conditional UPDATE (only clips still idle), so two quick clicks
@@ -1826,10 +1827,10 @@ async def _claim_and_queue(db: AsyncSession, tenant_id: str, video_id: str, clip
         text("""
             UPDATE clips SET status = 'regenerating', updated_at = NOW()
              WHERE id = ANY(CAST(:ids AS uuid[])) AND tenant_id = CAST(:t AS uuid)
-               AND status IN ('ready', 'upload_failed', 'failed')
+               AND status = ANY(CAST(:allowed AS text[]))
             RETURNING id
         """),
-        {"ids": list(before), "t": str(tenant_id)},
+        {"ids": list(before), "t": str(tenant_id), "allowed": list(allowed)},
     )
     claimed = [str(r[0]) for r in res.fetchall()]
     await db.commit()

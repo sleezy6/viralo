@@ -1408,7 +1408,9 @@ def reconcile_stuck_videos(self) -> dict:
         with Session(engine) as s:
             unstuck = s.execute(text("""
                 UPDATE clips
-                   SET status = CASE WHEN COALESCE(storage_url, '') <> '' THEN 'ready' ELSE 'failed' END,
+                   SET status = CASE WHEN COALESCE(storage_url, '') <> '' THEN 'ready'
+                                     WHEN COALESCE(metadata, '{}'::jsonb) ? 'tier' THEN 'suggested'
+                                     ELSE 'failed' END,
                        metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
                            'regenerate_error',
                            'Regenerate stopped unexpectedly (worker restarted or ran out of time). Try again.'),

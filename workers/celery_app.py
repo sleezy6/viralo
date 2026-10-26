@@ -55,6 +55,8 @@ celery_app.conf.update(
     broker_heartbeat_checkrate=2,  # check heartbeat twice per interval
     task_routes={
         "workers.tasks.video.generate_viral_clips": {"queue": "viralo.video.ai"},
+        # Studio "More titles": a quick AI call, so it doesn't wait behind renders.
+        "workers.tasks.video.suggest_clip_titles": {"queue": "viralo.video.ai"},
         "workers.tasks.video.process_uploaded_video": {"queue": "viralo.video.pipeline"},
         "workers.tasks.video.process_youtube_video": {"queue": "viralo.video.pipeline"},
         "workers.tasks.video.upload_clip_to_storage": {"queue": "viralo.video.upload"},

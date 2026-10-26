@@ -70,15 +70,21 @@ def _float_or_none(v) -> float | None:
         return None
 
 
+# The status a clip goes back to when no work is running on it: "ready" with a video
+# file, a Studio suggestion that was never rendered stays "suggested", else "failed".
+IDLE_STATUS_SQL = ("CASE WHEN COALESCE(storage_url, '') <> '' THEN 'ready' "
+                   "WHEN COALESCE(metadata, '{}'::jsonb) ? 'tier' THEN 'suggested' ELSE 'failed' END")
+
+
 def _restore_status(tenant_id: str, clip_id: str, error: str, only_if_regenerating: bool = False) -> None:
     """After a failed regenerate: the clip is usable again ("ready") if it still has a
-    video file, otherwise "failed" — never "ready" without a file. The error is shown
-    on the clip."""
+    video file, a never-rendered Studio suggestion stays a suggestion, otherwise
+    "failed" — never "ready" without a file. The error is shown on the clip."""
     with _get_session(tenant_id) as session:
         session.execute(
             text(f"""
                 UPDATE clips
-                   SET status = CASE WHEN COALESCE(storage_url, '') <> '' THEN 'ready' ELSE 'failed' END,
+                   SET status = {IDLE_STATUS_SQL},
                        metadata = COALESCE(metadata, '{{}}'::jsonb)
                                   || jsonb_build_object('regenerate_error', CAST(:err AS text)),
                        updated_at = NOW()
@@ -310,12 +316,12 @@ def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
                         title = str(ai_content["title"])[:100].strip()
                         with _get_session(tenant_id) as session:
                             session.execute(
-                                text("""
+                                text(f"""
                                     UPDATE clips
                                        SET title = :title,
-                                           metadata = (COALESCE(metadata, '{}'::jsonb) - 'regenerate_error')
+                                           metadata = (COALESCE(metadata, '{{}}'::jsonb) - 'regenerate_error')
                                                       || CAST(:meta AS jsonb),
-                                           status = 'ready', updated_at = NOW()
+                                           status = {IDLE_STATUS_SQL}, updated_at = NOW()
                                      WHERE id = CAST(:cid AS uuid)
                                 """),
                                 {"cid": cid, "title": title, "meta": json.dumps({
@@ -339,6 +345,9 @@ def _regenerate_clips(tenant_id: str, video_id: str, clip_ids: list[str], mode: 
                 if not exported:
                     raise RuntimeError("render produced no clip")
                 _, clip_path = exported
+                with _get_session(tenant_id) as session:  # the render now matches the Studio edits
+                    session.execute(text("UPDATE clips SET metadata = metadata - 'dirty' "
+                                         "WHERE id = CAST(:cid AS uuid) AND metadata ? 'dirty'"), {"cid": cid})
                 if (start, end) != (float(row.start_sec), float(row.end_sec)):
                     _save_new_timing(tenant_id, cid, start, end,
                                      start_moved=abs(start - float(row.start_sec)) >= 0.05)

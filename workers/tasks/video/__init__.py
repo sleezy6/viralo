@@ -39,3 +39,5 @@ from workers.tasks.video.pipeline import *  # noqa: F401,F403
 from workers.tasks.video.tasks import *  # noqa: F401,F403
 from workers.tasks.video.regenerate import *  # noqa: F401,F403  (sleezy6 fork)
 from workers.tasks.video.game_context import *  # noqa: F401,F403  (sleezy6 fork)
+from workers.tasks.video.preview import build_video_preview  # noqa: F401  (sleezy6 fork: Studio)
+from workers.tasks.video.studio import suggest_clip_titles  # noqa: F401  (sleezy6 fork: Studio)
