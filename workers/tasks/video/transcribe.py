@@ -274,6 +274,8 @@ def _parse_words_timed(response, offset: float) -> list[WordTimestamp]:
     # Weighting by character count tracks phoneme count better.
     for seg in (getattr(response, "segments", None) or []):
         raw = _get_attr(seg, "text") or ""
+        if _is_refusal(raw):
+            continue
         seg_start = float(_get_attr(seg, "start") or 0)
         seg_end = float(_get_attr(seg, "end") or 0)
         pieces = _diarized_pieces(raw)
@@ -314,6 +316,20 @@ _NEEDS_LANGUAGE: set[str] = set()
 # Models whose server rejected the transcription "prompt" field (sent without it since).
 _PROMPT_REJECTED: set[str] = set()
 _LOGGED_NO_SPEAKERS: set[str] = set()
+# Diarizing models whose plain-text ("json") reply came back without speaker tags,
+# so the speaker-first request is skipped for them from then on.
+_JSON_NO_TAGS: set[str] = set()
+
+# Assistant-style refusals a speech model can produce on silence or noise instead of a
+# transcript; never let them into the captions.
+_REFUSAL_RE = re.compile(
+    r"\b(can'?t|cannot|can not|unable to|not able to) assist\b"
+    r"|\b(can'?t|cannot|can not|unable to|not able to) help with (that|this|your) request", re.IGNORECASE)
+
+
+def _is_refusal(text: str) -> bool:
+    t = _strip_asr_tags(text or "")
+    return bool(t) and len(t.split()) <= 25 and bool(_REFUSAL_RE.search(t))
 
 # MOSS-Transcribe-Diarize's own default instruction (from its model card): transcribe
 # into segments that each start with a timestamp and a speaker label ([S01], [S02]…)
@@ -369,6 +385,34 @@ def _transcribe_chunk(groq_client, audio_bytes: bytes, filename: str, offset: fl
     first_lang = lang
     if lang is None and fallback_language and model in _NEEDS_LANGUAGE:
         first_lang = fallback_language
+    if prompt and model not in _JSON_NO_TAGS:
+        # Servers like Unsloth turn a diarizing model's "[start][S01]text[end]" output
+        # into plain verbose_json segments and drop the speaker labels on the way. The
+        # plain-text reply keeps the raw output, so ask for that first and read the
+        # speakers and timings from its inline tags.
+        try:
+            raw = getattr(_stt_create(groq_client, model, prompt, file=(filename, audio_bytes),
+                                      language=first_lang, response_format="json"), "text", "") or ""
+            if _is_refusal(raw):
+                logging.info(f"[Whisper] {model}: no speech in this chunk (model replied {raw[:80]!r})")
+                return [], (first_lang or "")
+            pieces = _diarized_pieces(raw)
+            if pieces:
+                words = []
+                for a, b, spk, body in pieces:
+                    words.extend(_spread(body.split(), a, max(b, a), offset, spk))
+                logging.info(f"[Whisper] {model}: {len(words)} words, "
+                             f"{len({p[2] for p in pieces})} speaker(s) from the text's inline tags")
+                return words, (first_lang or "")
+            if _strip_asr_tags(raw):
+                _JSON_NO_TAGS.add(model)
+                logging.info(f"[Whisper] {model}: plain-text reply has no speaker tags either; "
+                             f"using verbose_json from now on. Reply starts {raw[:300]!r}")
+        except SoftTimeLimitExceeded:
+            raise
+        except Exception as e:
+            _JSON_NO_TAGS.add(model)
+            logging.warning(f"[Whisper] {model}: plain-text request failed, using verbose_json: {str(e)[:160]}")
     attempts = [(first_lang, g) for g in (["word", "segment"], ["segment"])]
     for try_lang, granularities in attempts:
         try:
@@ -423,6 +467,9 @@ def _transcribe_chunk(groq_client, audio_bytes: bytes, filename: str, offset: fl
             response_format="json",
         )
         raw_text = getattr(response, "text", "") or ""
+        if _is_refusal(raw_text):
+            logging.info(f"[Whisper] {model}: no speech in this chunk (model replied {raw_text[:80]!r})")
+            return [], ""
         pieces = _diarized_pieces(raw_text)
         if pieces:
             words = []
