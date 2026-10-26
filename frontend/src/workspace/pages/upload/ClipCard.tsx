@@ -670,7 +670,7 @@ export function ClipCard({ clip, idx, selected = false, onToggleSelect, isPosted
         )}
         {!regenerating && regenError && (
           <p role="status" title={regenError}
-            className="mt-1.5 line-clamp-2 rounded-[8px] border border-red-400/25 bg-red-400/10 px-2.5 py-1.5 text-[11px] leading-snug text-red-300">
+            className="mt-1.5 whitespace-normal break-words rounded-[8px] border border-red-400/25 bg-red-400/10 px-2.5 py-1.5 text-[11px] leading-snug text-red-300">
             Regenerate failed: {regenError}
           </p>
         )}
