@@ -34,6 +34,14 @@ PLATFORM_TOKEN_URLS = {
 }
 
 
+def _youtube_cred(name: str) -> str:
+    """YOUTUBE_<name>, falling back to GOOGLE_<name> (same Google OAuth client)."""
+    val = (os.getenv(f"YOUTUBE_{name}") or os.getenv(f"GOOGLE_{name}") or "").strip()
+    if not val:
+        raise KeyError(f"YOUTUBE_{name} (or GOOGLE_{name}) is not set")
+    return val
+
+
 def _exchange_code(platform: str, code: str, redirect_uri: str, code_verifier: str | None = None) -> dict[str, Any]:
     """
     Exchange an OAuth authorization code for tokens.
@@ -47,8 +55,9 @@ def _exchange_code(platform: str, code: str, redirect_uri: str, code_verifier: s
             "https://oauth2.googleapis.com/token",
             data={
                 "code": code,
-                "client_id": os.environ["YOUTUBE_CLIENT_ID"],
-                "client_secret": os.environ["YOUTUBE_CLIENT_SECRET"],
+                # YOUTUBE_* or the GOOGLE_* names (the publisher accepts both too)
+                "client_id": _youtube_cred("CLIENT_ID"),
+                "client_secret": _youtube_cred("CLIENT_SECRET"),
                 "redirect_uri": redirect_uri,
                 "grant_type": "authorization_code",
             },
@@ -394,7 +403,9 @@ _OAUTH_CLIENT_ID_ENV = {
 @router.get("/oauth/client-ids")
 async def oauth_client_ids(token: TokenPayload = Depends(get_current_user)) -> dict[str, str]:
     """Client ID per platform ("" when that platform isn't set up)."""
-    return {p: os.getenv(env, "").strip() for p, env in _OAUTH_CLIENT_ID_ENV.items()}
+    ids = {p: os.getenv(env, "").strip() for p, env in _OAUTH_CLIENT_ID_ENV.items()}
+    ids["youtube"] = ids["youtube"] or os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    return ids
 
 
 @router.post("/oauth/connect", response_model=OAuthConnectResponse, status_code=status.HTTP_201_CREATED)
