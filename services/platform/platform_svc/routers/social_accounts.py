@@ -1,3 +1,4 @@
+# Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): OAuth client IDs served at runtime.
 """Social account OAuth connect + management endpoints."""
 import asyncio
 import os
@@ -376,6 +377,25 @@ def _exchange_code(platform: str, code: str, redirect_uri: str, code_verifier: s
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+# Public OAuth client IDs, read from the environment at request time. The web app used
+# to bake these in at build time (VITE_*_CLIENT_ID), so prebuilt images could never
+# connect an account. Only IDs — never secrets.
+_OAUTH_CLIENT_ID_ENV = {
+    "youtube": "YOUTUBE_CLIENT_ID",
+    "instagram": "INSTAGRAM_CLIENT_ID",
+    "tiktok": "TIKTOK_CLIENT_KEY",
+    "twitter": "TWITTER_API_KEY",
+    "linkedin": "LINKEDIN_CLIENT_ID",
+    "facebook": "FACEBOOK_APP_ID",
+}
+
+
+@router.get("/oauth/client-ids")
+async def oauth_client_ids(token: TokenPayload = Depends(get_current_user)) -> dict[str, str]:
+    """Client ID per platform ("" when that platform isn't set up)."""
+    return {p: os.getenv(env, "").strip() for p, env in _OAUTH_CLIENT_ID_ENV.items()}
+
 
 @router.post("/oauth/connect", response_model=OAuthConnectResponse, status_code=status.HTTP_201_CREATED)
 async def oauth_connect(

@@ -1,3 +1,4 @@
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): OAuth client IDs read from the server at runtime.
 import React, { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,26 @@ const TIKTOK_KEY        = import.meta.env.VITE_TIKTOK_KEY ?? "";
 const TWITTER_KEY       = import.meta.env.VITE_TWITTER_KEY ?? "";
 const LI_CLIENT_ID      = import.meta.env.VITE_LI_CLIENT_ID ?? "";
 const FB_APP_ID         = import.meta.env.VITE_FB_APP_ID ?? "";
+
+// Build-time IDs are only a fallback: prebuilt images have none, so the server's
+// environment (YOUTUBE_CLIENT_ID, …) is asked at runtime.
+const BUILD_CLIENT_IDS: Record<string, string> = {
+  youtube: YOUTUBE_CLIENT_ID, instagram: IG_CLIENT_ID, tiktok: TIKTOK_KEY,
+  twitter: TWITTER_KEY, linkedin: LI_CLIENT_ID, facebook: FB_APP_ID,
+};
+const CLIENT_ID_ENV: Record<string, string> = {
+  youtube: "YOUTUBE_CLIENT_ID", instagram: "INSTAGRAM_CLIENT_ID", tiktok: "TIKTOK_CLIENT_KEY",
+  twitter: "TWITTER_API_KEY", linkedin: "LINKEDIN_CLIENT_ID", facebook: "FACEBOOK_APP_ID",
+};
+let clientIdsPromise: Promise<Record<string, string>> | null = null;
+async function clientIdFor(platform: string): Promise<string> {
+  clientIdsPromise ??= platformApi.oauthClientIds().catch(() => {
+    clientIdsPromise = null;  // retry next time
+    return {} as Record<string, string>;
+  });
+  const runtime = (await clientIdsPromise)[platform];
+  return runtime || BUILD_CLIENT_IDS[platform] || "";
+}
 
 const REDIRECT = import.meta.env.VITE_OAUTH_REDIRECT
   || (typeof window !== "undefined" ? `${window.location.origin}/oauth/callback` : "");
@@ -45,12 +66,17 @@ function rememberOAuthAttempt(platform: string, state: string, codeVerifier?: st
 }
 
 async function buildOAuthUrl(platform: Platform) {
+  const clientId = await clientIdFor(platform.id);
+  if (!clientId) {
+    throw new Error(`${platform.label} isn't set up on this server yet: add `
+      + `${CLIENT_ID_ENV[platform.id] ?? "its client ID"} (and its secret) to Viralo's settings and redeploy.`);
+  }
   const state = randomOAuthState();
   const paramsByPlatform: Record<string, { base: string; params: Record<string, string> }> = {
     youtube: {
       base: "https://accounts.google.com/o/oauth2/v2/auth",
       params: {
-        client_id: YOUTUBE_CLIENT_ID,
+        client_id: clientId,
         redirect_uri: REDIRECT,
         response_type: "code",
         scope: "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly",
@@ -62,7 +88,7 @@ async function buildOAuthUrl(platform: Platform) {
     instagram: {
       base: "https://api.instagram.com/oauth/authorize",
       params: {
-        client_id: IG_CLIENT_ID,
+        client_id: clientId,
         redirect_uri: REDIRECT,
         scope: "instagram_business_basic,instagram_content_publish",
         response_type: "code",
@@ -73,7 +99,7 @@ async function buildOAuthUrl(platform: Platform) {
       base: "https://twitter.com/i/oauth2/authorize",
       params: {
         response_type: "code",
-        client_id: TWITTER_KEY,
+        client_id: clientId,
         redirect_uri: REDIRECT,
         scope: "tweet.write users.read media.write",
         code_challenge: "challenge",
@@ -85,7 +111,7 @@ async function buildOAuthUrl(platform: Platform) {
       base: "https://www.linkedin.com/oauth/v2/authorization",
       params: {
         response_type: "code",
-        client_id: LI_CLIENT_ID,
+        client_id: clientId,
         redirect_uri: REDIRECT,
         scope: "w_member_social",
         state,
@@ -94,7 +120,7 @@ async function buildOAuthUrl(platform: Platform) {
     facebook: {
       base: "https://www.facebook.com/v21.0/dialog/oauth",
       params: {
-        client_id: FB_APP_ID,
+        client_id: clientId,
         redirect_uri: REDIRECT,
         scope: "public_profile",
         response_type: "code",
@@ -103,7 +129,7 @@ async function buildOAuthUrl(platform: Platform) {
     },
   };
 
-  if (platform.id === "tiktok") return buildTikTokOAuthUrl(state);
+  if (platform.id === "tiktok") return buildTikTokOAuthUrl(state, clientId);
 
   const config = paramsByPlatform[platform.id];
   if (!config) throw new Error("Unsupported platform");
@@ -117,13 +143,13 @@ async function sha256Base64Url(value: string) {
   return base64UrlEncode(digest);
 }
 
-async function buildTikTokOAuthUrl(state: string) {
+async function buildTikTokOAuthUrl(state: string, clientId: string) {
   const verifier = randomCodeVerifier();
   const challenge = await sha256Base64Url(verifier);
   rememberOAuthAttempt("tiktok", state, verifier);
 
   const params = new URLSearchParams({
-    client_key: TIKTOK_KEY,
+    client_key: clientId,
     scope: "user.info.basic,video.publish",
     response_type: "code",
     redirect_uri: REDIRECT,
@@ -484,7 +510,11 @@ export function IntegrationsPage() {
   }, []);
 
   const handleConnect = async (platform: Platform) => {
-    window.location.href = await buildOAuthUrl(platform);
+    try {
+      window.location.href = await buildOAuthUrl(platform);
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : "Couldn't start connecting. Try again.");
+    }
   };
 
   const handleDisconnect = async (platform: Platform, account: SocialAccount) => {

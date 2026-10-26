@@ -766,6 +766,8 @@ function _listAccountsCached(): Promise<SocialAccount[]> {
 }
 
 export const platformApi = {
+  /** OAuth client IDs from the server's environment ("" = platform not set up). */
+  oauthClientIds: () => platformReq<Record<string, string>>("GET", "/oauth/client-ids"),
   // Social accounts
   connectOAuth: (platform: string, code: string, redirect_uri: string, extra?: Record<string, string>) =>
     platformReq<{ account_id: string; platform: string; username: string }>(

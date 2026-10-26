@@ -520,6 +520,20 @@ services:
       - CMD-SHELL
       - python -c "import urllib.request; urllib.request.urlopen('http://localhost:8006/health')"
     environment:
+      # Social media sign-in (Integrations): the app reads the client IDs at runtime.
+      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:-}
+      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:-}
+      INSTAGRAM_CLIENT_ID: ${INSTAGRAM_CLIENT_ID:-}
+      INSTAGRAM_CLIENT_SECRET: ${INSTAGRAM_CLIENT_SECRET:-}
+      TIKTOK_CLIENT_KEY: ${TIKTOK_CLIENT_KEY:-}
+      TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET:-}
+      TWITTER_API_KEY: ${TWITTER_API_KEY:-}
+      TWITTER_API_SECRET: ${TWITTER_API_SECRET:-}
+      LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
+      LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
+      FACEBOOK_APP_ID: ${FACEBOOK_APP_ID:-}
+      FACEBOOK_APP_SECRET: ${FACEBOOK_APP_SECRET:-}
+      OAUTH_ALLOWED_REDIRECT_URIS: ${OAUTH_ALLOWED_REDIRECT_URIS:-}
       DATABASE_URL: postgresql+asyncpg://viralo:${POSTGRES_PASSWORD}@postgres:5432/viralo
       REDIS_URL: redis://redis:6379/0
       RABBITMQ_URL: amqp://viralo:${RABBITMQ_PASS}@rabbitmq:5672//
@@ -1168,6 +1182,20 @@ services:
       retries: 3
       start_period: 30s
     environment:
+      # Social media sign-in (Integrations): the app reads the client IDs at runtime.
+      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:-}
+      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:-}
+      INSTAGRAM_CLIENT_ID: ${INSTAGRAM_CLIENT_ID:-}
+      INSTAGRAM_CLIENT_SECRET: ${INSTAGRAM_CLIENT_SECRET:-}
+      TIKTOK_CLIENT_KEY: ${TIKTOK_CLIENT_KEY:-}
+      TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET:-}
+      TWITTER_API_KEY: ${TWITTER_API_KEY:-}
+      TWITTER_API_SECRET: ${TWITTER_API_SECRET:-}
+      LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
+      LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
+      FACEBOOK_APP_ID: ${FACEBOOK_APP_ID:-}
+      FACEBOOK_APP_SECRET: ${FACEBOOK_APP_SECRET:-}
+      OAUTH_ALLOWED_REDIRECT_URIS: ${OAUTH_ALLOWED_REDIRECT_URIS:-}
       DATABASE_URL: postgresql+asyncpg://viralo:${POSTGRES_PASSWORD}@postgres:5432/viralo
       REDIS_URL: redis://redis:6379/0
       RABBITMQ_URL: amqp://viralo:${RABBITMQ_PASS}@rabbitmq:5672//
