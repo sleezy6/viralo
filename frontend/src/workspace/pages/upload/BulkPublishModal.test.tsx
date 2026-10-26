@@ -1,3 +1,4 @@
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): modal renders into document.body.
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
@@ -47,12 +48,12 @@ describe("BulkPublishModal mobile layout", () => {
       await Promise.resolve();
     });
 
-    const panel = container.querySelector('[data-testid="bulk-publish-modal"]');
-    const actions = container.querySelector('[data-testid="bulk-publish-actions"]');
+    const panel = document.querySelector('[data-testid="bulk-publish-modal"]');
+    const actions = document.querySelector('[data-testid="bulk-publish-actions"]');
 
     expect(panel?.className).toContain("min-w-0");
     expect(panel?.className).toContain("overflow-x-hidden");
-    expect(panel?.className).toContain("max-w-full");
+    expect(panel?.className).toContain("max-w-[min(560px,100%)]");  // 560 px, never wider than the screen
 
     expect(actions?.className).toContain("grid");
     expect(actions?.className).toContain("grid-cols-2");
@@ -70,7 +71,7 @@ describe("BulkPublishModal mobile layout", () => {
     });
 
     const submit = Array.from(
-      container.querySelector('[data-testid="bulk-publish-actions"]')?.querySelectorAll("button") ?? [],
+      document.querySelector('[data-testid="bulk-publish-actions"]')?.querySelectorAll("button") ?? [],
     ).find((b) => b.textContent?.includes("Schedule"));
     await act(async () => {
       submit?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -79,7 +80,7 @@ describe("BulkPublishModal mobile layout", () => {
       await Promise.resolve();
     });
 
-    const actions = container.querySelector('[data-testid="bulk-publish-actions"]');
+    const actions = document.querySelector('[data-testid="bulk-publish-actions"]');
     const doneButton = Array.from(actions?.querySelectorAll("button") ?? []).find(
       (b) => b.textContent?.trim() === "Done",
     );
@@ -104,7 +105,7 @@ describe("BulkPublishModal mobile layout", () => {
       await Promise.resolve();
     });
 
-    const postNowBtn = Array.from(container.querySelectorAll("button")).find(
+    const postNowBtn = Array.from(document.querySelectorAll("button")).find(
       (b) => b.textContent?.trim() === "Post now",
     );
     await act(async () => {
@@ -112,7 +113,7 @@ describe("BulkPublishModal mobile layout", () => {
     });
 
     const submit = Array.from(
-      container.querySelector('[data-testid="bulk-publish-actions"]')?.querySelectorAll("button") ?? [],
+      document.querySelector('[data-testid="bulk-publish-actions"]')?.querySelectorAll("button") ?? [],
     ).find((b) => b.textContent?.includes("Post") && b.textContent?.includes("now"));
     await act(async () => {
       submit?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -136,7 +137,7 @@ describe("BulkPublishModal mobile layout", () => {
     });
 
     const submit = Array.from(
-      container.querySelector('[data-testid="bulk-publish-actions"]')?.querySelectorAll("button") ?? [],
+      document.querySelector('[data-testid="bulk-publish-actions"]')?.querySelectorAll("button") ?? [],
     ).find((b) => b.textContent?.includes("Schedule"));
     await act(async () => {
       submit?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -159,7 +160,7 @@ describe("BulkPublishModal mobile layout", () => {
       await Promise.resolve();
     });
 
-    const postNowBtn = Array.from(container.querySelectorAll("button")).find(
+    const postNowBtn = Array.from(document.querySelectorAll("button")).find(
       (b) => b.textContent?.trim() === "Post now",
     );
     await act(async () => {
@@ -167,7 +168,7 @@ describe("BulkPublishModal mobile layout", () => {
     });
 
     const submit = Array.from(
-      container.querySelector('[data-testid="bulk-publish-actions"]')?.querySelectorAll("button") ?? [],
+      document.querySelector('[data-testid="bulk-publish-actions"]')?.querySelectorAll("button") ?? [],
     ).find((b) => b.textContent?.includes("Post") && b.textContent?.includes("now"));
     await act(async () => {
       submit?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -176,7 +177,7 @@ describe("BulkPublishModal mobile layout", () => {
       await Promise.resolve();
     });
 
-    const errorEl = container.querySelector(".text-red-400");
+    const errorEl = document.querySelector(".text-red-400");
     expect(errorEl?.textContent).toContain("celery down");
     expect(errorEl?.textContent).toContain("Post saved but not enqueued");
   });
@@ -204,7 +205,7 @@ describe("BulkPublishModal mobile layout", () => {
     });
 
     const getGroup = (slotNum: number) => {
-      const span = Array.from(container.querySelectorAll("span")).find((s) =>
+      const span = Array.from(document.querySelectorAll("span")).find((s) =>
         s.textContent?.includes(`Slot ${slotNum}`),
       );
       return span?.closest('div[class*="rounded-[14px]"]') as HTMLElement;
@@ -227,7 +228,7 @@ describe("BulkPublishModal mobile layout", () => {
     });
 
     // Add group 2 (processed AFTER the failing group), assign clip-2, "schedule for later".
-    const addSlotBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+    const addSlotBtn = Array.from(document.querySelectorAll("button")).find((b) =>
       b.textContent?.includes("Add time slot"),
     );
     await act(async () => {
@@ -247,7 +248,7 @@ describe("BulkPublishModal mobile layout", () => {
     });
 
     const submit = Array.from(
-      container.querySelector('[data-testid="bulk-publish-actions"]')?.querySelectorAll("button") ?? [],
+      document.querySelector('[data-testid="bulk-publish-actions"]')?.querySelectorAll("button") ?? [],
     ).find((b) => b.textContent?.includes("Schedule") || b.textContent?.includes("Post"));
     await act(async () => {
       submit?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -266,7 +267,7 @@ describe("BulkPublishModal mobile layout", () => {
     expect(publishNow).toHaveBeenCalledWith("post-clip-1");
     expect(publishNow).toHaveBeenCalledWith("post-clip-3");
 
-    const errorEl = container.querySelector(".text-red-400");
+    const errorEl = document.querySelector(".text-red-400");
     expect(errorEl?.textContent).toContain("Clip One");
     expect(errorEl?.textContent).toContain("provider rejected");
     // The succeeded groups (clip-2 scheduled, clip-3 post-now) must be called out as already done,
@@ -278,7 +279,7 @@ describe("BulkPublishModal mobile layout", () => {
 
     // Retry-safety: the failed clip's submit button must relabel to a scoped retry, not a full resubmit.
     const retryBtn = Array.from(
-      container.querySelector('[data-testid="bulk-publish-actions"]')?.querySelectorAll("button") ?? [],
+      document.querySelector('[data-testid="bulk-publish-actions"]')?.querySelectorAll("button") ?? [],
     ).find((b) => b.textContent?.includes("Retry"));
     expect(retryBtn?.textContent).toContain("Retry 1 failed clip");
 
@@ -308,7 +309,7 @@ describe("BulkPublishModal mobile layout", () => {
       await Promise.resolve();
     });
 
-    const postNowBtn = Array.from(container.querySelectorAll("button")).find(
+    const postNowBtn = Array.from(document.querySelectorAll("button")).find(
       (b) => b.textContent?.trim() === "Post now",
     );
     await act(async () => {
@@ -317,7 +318,7 @@ describe("BulkPublishModal mobile layout", () => {
 
     const clickSubmit = async () => {
       const btn = Array.from(
-        container.querySelector('[data-testid="bulk-publish-actions"]')?.querySelectorAll("button") ?? [],
+        document.querySelector('[data-testid="bulk-publish-actions"]')?.querySelectorAll("button") ?? [],
       ).find((b) => b.textContent?.includes("Post") || b.textContent?.includes("Retry"));
       await act(async () => {
         btn?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -355,7 +356,7 @@ describe("BulkPublishModal mobile layout", () => {
     });
 
     const submit = Array.from(
-      container.querySelector('[data-testid="bulk-publish-actions"]')?.querySelectorAll("button") ?? [],
+      document.querySelector('[data-testid="bulk-publish-actions"]')?.querySelectorAll("button") ?? [],
     ).find((b) => b.textContent?.includes("Schedule"));
     await act(async () => {
       submit?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -368,7 +369,7 @@ describe("BulkPublishModal mobile layout", () => {
     expect(schedulePost).toHaveBeenCalledTimes(2);
     // The retry count must include the schedulePost-level failure, not just publishNow ones.
     const retryBtn = Array.from(
-      container.querySelector('[data-testid="bulk-publish-actions"]')?.querySelectorAll("button") ?? [],
+      document.querySelector('[data-testid="bulk-publish-actions"]')?.querySelectorAll("button") ?? [],
     ).find((b) => b.textContent?.includes("Retry"));
     expect(retryBtn?.textContent).toContain("Retry 1 failed clip");
   });

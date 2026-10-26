@@ -1,4 +1,6 @@
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): fixed width; rendered above the sidebar.
 import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import { platformApi, type ClipApiResponse, type SocialAccount } from "@/lib/api";
 
@@ -146,11 +148,13 @@ export function BulkPublishModal({ clips, onClose }: { clips: ClipApiResponse[];
   const anyPostNow = groups.some((g) => g.postNow && g.clipIds.length > 0);
   const allPostNow = groups.length > 0 && groups.every((g) => g.clipIds.length === 0 || g.postNow);
 
-  return (
+  // Rendered into <body>: inside the page it sat in the page's stacking context, so the
+  // sidebar drew on top of it and wasn't dimmed.
+  return createPortal((
     <div className="fixed inset-0 z-[300] flex items-center justify-center p-4"
       style={{ background: "rgba(4,7,15,.85)", backdropFilter: "blur(6px)" }}
       onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div data-testid="bulk-publish-modal" className="flex w-full max-w-[560px] min-w-0 max-w-full flex-col overflow-x-hidden rounded-[20px] border border-c-border bg-surface-0 shadow-[0_40px_100px_rgba(0,0,0,.7)]"
+      <div data-testid="bulk-publish-modal" className="flex w-full max-w-[min(560px,100%)] min-w-0 flex-col overflow-x-hidden rounded-[20px] border border-c-border bg-surface-0 shadow-[0_40px_100px_rgba(0,0,0,.7)]"
         style={{ maxHeight: "90vh" }}
         onClick={(e) => e.stopPropagation()}>
 
@@ -308,5 +312,5 @@ export function BulkPublishModal({ clips, onClose }: { clips: ClipApiResponse[];
         )}
       </div>
     </div>
-  );
+  ), document.body);
 }

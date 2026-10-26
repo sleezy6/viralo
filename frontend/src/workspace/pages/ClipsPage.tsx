@@ -1,6 +1,8 @@
-// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): editor Apply to clip.
+// Modified 2026 by sleezy6 (fork of sammyview80/viralo, Apache-2.0): editor Apply to clip; regenerate state;
+// publish dialog above the sidebar.
 import { CLIP_BUSY_STATUSES } from "./upload/RegenerateDialog";
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
+import { createPortal } from "react-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn, safeFilename, downloadUrl } from "@/lib/utils";
@@ -293,8 +295,9 @@ function PublishModal({ clip, onClose }: { clip: ClipApiResponse; onClose: () =>
     catch (e) { setError(e instanceof Error ? e.message : "Something went wrong."); }
     finally { setSubmitting(false); }
   }
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+  // Rendered into <body> so the sidebar can't draw on top of it.
+  return createPortal((
+    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="relative w-full max-w-[440px] rounded-[18px] border border-c-border bg-surface-1 shadow-2xl">
         <div className="flex items-center justify-between border-b border-c-border px-5 py-4"><h2 className="font-display text-[15px] font-bold">Schedule Post</h2><button onClick={onClose} className="grid h-7 w-7 place-items-center rounded-full text-c-text-muted hover:bg-surface-2 hover:text-c-text transition cursor-pointer">✕</button></div>
         <div className="space-y-4 p-5">
@@ -370,7 +373,7 @@ function PublishModal({ clip, onClose }: { clip: ClipApiResponse; onClose: () =>
         </div>
       </div>
     </div>
-  );
+  ), document.body);
 }
 
 function ShortsPlayer({ clip }: { clip: ClipApiResponse }) {
