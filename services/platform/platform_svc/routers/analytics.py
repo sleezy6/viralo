@@ -132,6 +132,28 @@ async def analytics_timeseries(
     return AnalyticsTimeseriesResponse(period=period, points=points)
 
 
+def _virality(engagement_rate: float, views: int) -> float:
+    """Same 0–100 score the analytics worker stores."""
+    return round(min(100.0, engagement_rate * 50 + views / 10_000), 1)
+
+
+def _post_title(post: ScheduledPost) -> str:
+    kw = post.platform_kwargs if isinstance(post.platform_kwargs, dict) else {}
+    title = (kw.get("title") or "").strip() or (post.caption or "").strip().split("\n")[0]
+    return title[:120]
+
+
+def _post_url(platform: str, ppid: str | None) -> str | None:
+    if not ppid:
+        return None
+    return {
+        "youtube": f"https://www.youtube.com/shorts/{ppid}",
+        "tiktok": f"https://www.tiktok.com/@/video/{ppid}",
+        "instagram": f"https://www.instagram.com/reel/{ppid}/",
+        "twitter": f"https://x.com/i/status/{ppid}",
+    }.get((platform or "").lower())
+
+
 @router.get("/analytics/posts")
 async def analytics_posts(
     page: int = Query(1, ge=1),
@@ -139,82 +161,66 @@ async def analytics_posts(
     token: TokenPayload = Depends(get_current_user),
     db: AsyncSession = Depends(get_tenant_db),
 ) -> dict:
-    """Return per-post analytics summary (paginated)."""
+    """Per-post stats (latest fetch of each), newest posts first, paginated."""
     tenant_id = uuid.UUID(token.tenant_id) if isinstance(token.tenant_id, str) else token.tenant_id
 
     # Explicit tenant_id filter — defense-in-depth, do not rely on RLS alone.
-    # Count posted posts with any analytics events
-    count_sq = (
-        select(func.count(func.distinct(AnalyticsEvent.scheduled_post_id)))
-        .where(AnalyticsEvent.tenant_id == tenant_id)
-    )
-    total_result = await db.execute(count_sq)
-    total = total_result.scalar_one()
-
-    # Get distinct post IDs with events, paginated
-    post_ids_q = (
+    with_stats = (
         select(AnalyticsEvent.scheduled_post_id)
         .where(AnalyticsEvent.tenant_id == tenant_id)
         .distinct()
-        .order_by(AnalyticsEvent.scheduled_post_id)
-        .offset((page - 1) * per_page)
-        .limit(per_page)
+        .subquery()
     )
-    post_ids_result = await db.execute(post_ids_q)
-    post_ids = [row[0] for row in post_ids_result.all()]
-
-    if not post_ids:
+    base = select(ScheduledPost).where(
+        ScheduledPost.tenant_id == tenant_id,
+        ScheduledPost.id.in_(select(with_stats.c.scheduled_post_id)),
+    )
+    total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
+    posts = (await db.execute(
+        base.order_by(ScheduledPost.posted_at.desc().nulls_last())
+        .offset((page - 1) * per_page).limit(per_page)
+    )).scalars().all()
+    if not posts:
         return {"items": [], "total": total, "page": page, "per_page": per_page}
 
-    # Fetch posts
-    posts_result = await db.execute(
-        select(ScheduledPost).where(
-            ScheduledPost.id.in_(post_ids),
-            ScheduledPost.tenant_id == tenant_id,
-        )
-    )
-    posts_map = {p.id: p for p in posts_result.scalars().all()}
-
-    # Latest event per post
+    post_ids = [p.id for p in posts]
     latest_sq = (
-        select(
-            AnalyticsEvent.scheduled_post_id,
-            func.max(AnalyticsEvent.fetched_at).label("max_fetched"),
-        )
+        select(AnalyticsEvent.scheduled_post_id, func.max(AnalyticsEvent.fetched_at).label("max_fetched"))
         .where(AnalyticsEvent.scheduled_post_id.in_(post_ids))
         .group_by(AnalyticsEvent.scheduled_post_id)
         .subquery()
     )
-    events_result = await db.execute(
+    events = (await db.execute(
         select(AnalyticsEvent).join(
             latest_sq,
             (AnalyticsEvent.scheduled_post_id == latest_sq.c.scheduled_post_id)
             & (AnalyticsEvent.fetched_at == latest_sq.c.max_fetched),
         )
-    )
-    events_map = {e.scheduled_post_id: e for e in events_result.scalars().all()}
+    )).scalars().all()
+    events_map = {e.scheduled_post_id: e for e in events}
 
     items = []
-    for pid in post_ids:
-        post = posts_map.get(pid)
-        event = events_map.get(pid)
-        if not post:
+    for post in posts:
+        e = events_map.get(post.id)
+        if not e:
             continue
-        item = {
-            "post_id": str(pid),
+        views, likes = int(e.views or 0), int(e.likes or 0)
+        er = float(e.engagement_rate or 0)
+        items.append({
+            "scheduled_post_id": str(post.id),
             "platform": post.platform,
-            "status": post.status,
+            "platform_post_id": post.platform_post_id or e.platform_post_id or "",
+            "title": _post_title(post),
+            "url": _post_url(post.platform, post.platform_post_id or e.platform_post_id),
             "posted_at": post.posted_at.isoformat() if post.posted_at else None,
-            "caption": post.caption,
-            "views": event.views if event else None,
-            "likes": event.likes if event else None,
-            "comments": event.comments if event else None,
-            "shares": event.shares if event else None,
-            "engagement_rate": float(event.engagement_rate) if event and event.engagement_rate else None,
-            "fetched_at": event.fetched_at.isoformat() if event else None,
-        }
-        items.append(item)
-
+            "views": views,
+            "likes": likes,
+            "comments": int(e.comments or 0),
+            "shares": int(e.shares or 0),
+            "engagement_rate": er,
+            "virality_score": _virality(er, views),
+            "fetched_at": e.fetched_at.isoformat() if e.fetched_at else None,
+        })
     return {"items": items, "total": total, "page": page, "per_page": per_page}
 
 

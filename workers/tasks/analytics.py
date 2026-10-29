@@ -5,7 +5,7 @@ import logging
 import os
 import uuid
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 try:
     import requests
@@ -28,7 +28,7 @@ engine = create_engine(SYNC_DATABASE_URL, pool_pre_ping=True)
 @contextmanager
 def _get_session(tenant_id: str):
     with Session(engine) as session:
-        session.execute(text("SET LOCAL app.current_tenant = :tid"), {"tid": str(tenant_id)})
+        session.execute(text("SELECT set_config('app.current_tenant', :tid, true)"), {"tid": str(tenant_id)})
         try:
             yield session
             session.commit()
@@ -262,9 +262,14 @@ def _compute_virality_score(engagement_rate: float, views: int) -> float:
 
 # ── Beat task: refresh all analytics ─────────────────────────────────────────
 
+# Posts older than this aren't refreshed (the page shows at most 90 days; this keeps
+# API quota use bounded).
+REFRESH_WINDOW_DAYS = 120
+
+
 @celery_app.task(name="workers.tasks.analytics.refresh_analytics")
 def refresh_analytics():
-    """Celery Beat task — enqueue analytics fetch for all posted content."""
+    """Celery Beat task — enqueue an analytics fetch for every recently posted post."""
     with engine.connect() as conn:
         rows = conn.execute(
             text("""
@@ -272,23 +277,53 @@ def refresh_analytics():
                 FROM scheduled_posts
                 WHERE status = 'posted'
                   AND platform_post_id IS NOT NULL
+                  AND COALESCE(posted_at, created_at) >= NOW() - make_interval(days => :days)
                 ORDER BY posted_at DESC
                 LIMIT 5000
-            """)
+            """),
+            {"days": REFRESH_WINDOW_DAYS},
         ).fetchall()
 
-    if not rows:
-        return
-
     for row in rows:
-        post_id = str(row[0])
-        tenant_id = str(row[1])
-        fetch_post_analytics.apply_async(
-            args=[tenant_id, post_id],
-            queue="viralo.analytics.ingest",
-        )
-
+        fetch_post_analytics.apply_async(args=[str(row[1]), str(row[0])], queue="viralo.analytics.ingest")
     logger.info("refresh_analytics: enqueued %d analytics tasks", len(rows))
+    return {"enqueued": len(rows)}
+
+
+def _fresh_access_token(tenant_id: str, account_id: str, platform: str, access_token: str,
+                        refresh_token_enc: str | None, expires_at) -> str:
+    """The account's access token, renewed first (and saved) when it expires within 5
+    minutes — YouTube's expire after an hour. Same renewal as publishing uses."""
+    if not expires_at:
+        return access_token
+    now = datetime.now(timezone.utc)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at > now + timedelta(minutes=5):
+        return access_token
+    if not refresh_token_enc:
+        raise RuntimeError("access token expired and no refresh token — reconnect the account")
+    from workers.publishers.registry import get_publisher
+    from workers.tasks.post import _encrypt_token
+    refresh_token = _decrypt_token(refresh_token_enc)
+    new = get_publisher(platform).refresh_token(refresh_token)
+    new_access = (new or {}).get("access_token") if isinstance(new, dict) else None
+    if not new_access:
+        return access_token  # static tokens (no refresh) keep working as they are
+    new_refresh = new.get("refresh_token") or refresh_token
+    with _get_session(tenant_id) as session:
+        session.execute(
+            text("""
+                UPDATE social_accounts
+                   SET access_token_enc = :at, refresh_token_enc = :rt, token_expires_at = :exp,
+                       updated_at = NOW()
+                 WHERE id = CAST(:aid AS uuid)
+            """),
+            {"at": _encrypt_token(new_access), "rt": _encrypt_token(new_refresh),
+             "exp": now + timedelta(seconds=int(new.get("expires_in") or 3600)), "aid": account_id},
+        )
+    logger.info("fetch_post_analytics: refreshed the %s token for account %s", platform, account_id)
+    return new_access
 
 
 # ── Fetch analytics for a single post ────────────────────────────────────────
@@ -304,152 +339,87 @@ def refresh_analytics():
 def fetch_post_analytics(self, tenant_id: str, post_id: str):
     """Fetch metrics for a posted video from the platform API and persist them."""
     try:
-        # ── 1. Load post + social account ─────────────────────────────────────
         with _get_session(tenant_id) as session:
             row = session.execute(
                 text("""
-                    SELECT
-                        sp.id,
-                        sp.platform,
-                        sp.platform_post_id,
-                        sa.access_token_enc
+                    SELECT sp.platform, sp.platform_post_id, sa.id::text AS account_id,
+                           sa.access_token_enc, sa.refresh_token_enc, sa.token_expires_at
                     FROM scheduled_posts sp
-                    JOIN social_accounts sa
-                        ON sa.id = sp.social_account_id
+                    JOIN social_accounts sa ON sa.id = sp.social_account_id
                     WHERE sp.id = CAST(:pid AS uuid)
                       AND sp.status = 'posted'
                       AND sp.platform_post_id IS NOT NULL
                 """),
                 {"pid": post_id},
             ).fetchone()
-
         if not row:
             logger.warning("fetch_post_analytics: post %s not found or not posted", post_id)
             return
 
-        _post_id, platform, platform_post_id, access_token_enc = row
-
-        # ── 2. Decrypt access token ────────────────────────────────────────────
-        access_token = _decrypt_token(access_token_enc) if access_token_enc else ""
-
-        # ── 3. Fetch metrics from platform ────────────────────────────────────
-        fetcher = _PLATFORM_FETCHERS.get(platform.lower())
+        platform = (row.platform or "").lower()
+        fetcher = _PLATFORM_FETCHERS.get(platform)
         if not fetcher:
-            logger.warning("fetch_post_analytics: no fetcher for platform %s", platform)
+            logger.info("fetch_post_analytics: no stats fetcher for platform %s", platform)
             return
 
-        raw_metrics = fetcher(platform_post_id, access_token)
-        if not raw_metrics:
-            logger.warning(
-                "fetch_post_analytics: empty metrics for post %s on %s", post_id, platform
-            )
+        access_token = _decrypt_token(row.access_token_enc) if row.access_token_enc else ""
+        access_token = _fresh_access_token(tenant_id, row.account_id, platform, access_token,
+                                           row.refresh_token_enc, row.token_expires_at)
+
+        raw = fetcher(row.platform_post_id, access_token)
+        if not raw:
+            logger.warning("fetch_post_analytics: no stats for post %s on %s (deleted or private?)",
+                           post_id, platform)
             return
 
-        # ── 4. Parse and derive metrics ────────────────────────────────────────
-        views = int(raw_metrics.get("views", 0))
-        likes = int(raw_metrics.get("likes", 0))
-        comments = int(raw_metrics.get("comments", 0))
-        shares = int(raw_metrics.get("shares", 0))
-        saves = int(raw_metrics.get("saves", 0))
-        reach = int(raw_metrics.get("reach", 0))
-        impressions = int(raw_metrics.get("impressions", 0))
+        m = {k: int(raw.get(k, 0) or 0) for k in
+             ("views", "likes", "comments", "shares", "saves", "reach", "impressions")}
+        engagement_rate = (m["likes"] + m["comments"] + m["shares"]) / max(m["views"], 1)
+        virality_score = _compute_virality_score(engagement_rate, m["views"])
+        er = round(min(engagement_rate, 99.0), 4)
 
-        engagement_rate = (likes + comments + shares) / max(views, 1)
-        virality_score = _compute_virality_score(engagement_rate, views)
-
-        today = date.today().isoformat()
-        fetched_at = datetime.now(timezone.utc)
-
-        # ── 5. Insert analytics event ─────────────────────────────────────────
         with _get_session(tenant_id) as session:
             session.execute(
                 text("""
                     INSERT INTO analytics_events (
-                        id, tenant_id, post_id, platform,
-                        views, likes, comments, shares, saves,
-                        reach, impressions,
-                        engagement_rate, virality_score,
-                        fetched_at, created_at
+                        id, tenant_id, scheduled_post_id, platform, platform_post_id,
+                        views, likes, comments, shares, saves, reach, impressions,
+                        engagement_rate, fetched_at
                     ) VALUES (
-                        :id, CAST(:tid AS uuid), CAST(:pid AS uuid), :platform,
-                        :views, :likes, :comments, :shares, :saves,
-                        :reach, :impressions,
-                        :er, :vs,
-                        :fetched_at, NOW()
+                        CAST(:id AS uuid), CAST(:tid AS uuid), CAST(:pid AS uuid), :platform, :ppid,
+                        :views, :likes, :comments, :shares, :saves, :reach, :impressions,
+                        :er, NOW()
                     )
                 """),
-                {
-                    "id": str(uuid.uuid4()),
-                    "tid": tenant_id,
-                    "pid": post_id,
-                    "platform": platform,
-                    "views": views,
-                    "likes": likes,
-                    "comments": comments,
-                    "shares": shares,
-                    "saves": saves,
-                    "reach": reach,
-                    "impressions": impressions,
-                    "er": round(engagement_rate, 6),
-                    "vs": round(virality_score, 2),
-                    "fetched_at": fetched_at,
-                },
+                {"id": str(uuid.uuid4()), "tid": tenant_id, "pid": post_id, "platform": platform,
+                 "ppid": row.platform_post_id, "er": er, **m},
             )
-
-            # ── 6. Upsert daily snapshot ───────────────────────────────────────
+            # One row per post per day: today's latest numbers.
             session.execute(
                 text("""
                     INSERT INTO analytics_snapshots (
-                        id, tenant_id, post_id, platform, snapshot_date,
-                        views, likes, comments, shares, saves,
-                        reach, impressions,
-                        engagement_rate, virality_score,
-                        created_at, updated_at
+                        id, tenant_id, scheduled_post_id, platform, snapshot_date,
+                        views, likes, comments, shares, engagement_rate, virality_score
                     ) VALUES (
-                        :id, CAST(:tid AS uuid), CAST(:pid AS uuid), :platform, CAST(:sdate AS date),
-                        :views, :likes, :comments, :shares, :saves,
-                        :reach, :impressions,
-                        :er, :vs,
-                        NOW(), NOW()
+                        CAST(:id AS uuid), CAST(:tid AS uuid), CAST(:pid AS uuid), :platform, CAST(:sdate AS date),
+                        :views, :likes, :comments, :shares, :er, :vs
                     )
-                    ON CONFLICT (post_id, snapshot_date)
-                    DO UPDATE SET
-                        views = EXCLUDED.views,
-                        likes = EXCLUDED.likes,
-                        comments = EXCLUDED.comments,
-                        shares = EXCLUDED.shares,
-                        saves = EXCLUDED.saves,
-                        reach = EXCLUDED.reach,
-                        impressions = EXCLUDED.impressions,
-                        engagement_rate = EXCLUDED.engagement_rate,
-                        virality_score = EXCLUDED.virality_score,
-                        updated_at = NOW()
+                    ON CONFLICT (tenant_id, scheduled_post_id, snapshot_date)
+                    DO UPDATE SET views = EXCLUDED.views, likes = EXCLUDED.likes,
+                                  comments = EXCLUDED.comments, shares = EXCLUDED.shares,
+                                  engagement_rate = EXCLUDED.engagement_rate,
+                                  virality_score = EXCLUDED.virality_score
                 """),
-                {
-                    "id": str(uuid.uuid4()),
-                    "tid": tenant_id,
-                    "pid": post_id,
-                    "platform": platform,
-                    "sdate": today,
-                    "views": views,
-                    "likes": likes,
-                    "comments": comments,
-                    "shares": shares,
-                    "saves": saves,
-                    "reach": reach,
-                    "impressions": impressions,
-                    "er": round(engagement_rate, 6),
-                    "vs": round(virality_score, 2),
-                },
+                {"id": str(uuid.uuid4()), "tid": tenant_id, "pid": post_id, "platform": platform,
+                 "sdate": date.today().isoformat(), "views": m["views"], "likes": m["likes"],
+                 "comments": m["comments"], "shares": m["shares"], "er": er,
+                 "vs": round(virality_score, 2)},
             )
 
-        logger.info(
-            "fetch_post_analytics: post=%s platform=%s views=%d er=%.4f virality=%.1f",
-            post_id, platform, views, engagement_rate, virality_score,
-        )
+        logger.info("fetch_post_analytics: post=%s platform=%s views=%d er=%.4f virality=%.1f",
+                    post_id, platform, m["views"], engagement_rate, virality_score)
+        return {"views": m["views"]}
 
     except Exception as exc:
         # Analytics is non-critical — log and do not blow up the worker
-        logger.warning(
-            "fetch_post_analytics: failed for post %s: %s", post_id, exc, exc_info=True
-        )
+        logger.warning("fetch_post_analytics: failed for post %s: %s", post_id, exc, exc_info=True)

@@ -775,13 +775,19 @@ export interface PostAnalytics {
   scheduled_post_id: string;
   platform: string;
   platform_post_id: string;
+  /** The post's title (YouTube) or the first line of its caption. */
+  title: string;
+  /** Link to the post on the platform, when known. */
+  url: string | null;
+  posted_at: string | null;
   views: number;
   likes: number;
   comments: number;
   shares: number;
+  /** (likes + comments + shares) / views, as a fraction (0.05 = 5%). */
   engagement_rate: number;
   virality_score: number | null;
-  fetched_at: string;
+  fetched_at: string | null;
 }
 
 export interface AppNotification {

@@ -138,7 +138,7 @@ export function AnalyticsPage() {
                 <StatCard
                   icon="%"
                   label="Engagement Rate"
-                  value={`${overview.engagement_rate.toFixed(2)}%`}
+                  value={`${(overview.engagement_rate * 100).toFixed(2)}%`}
                 />
                 <StatCard icon="📤" label="Posts Published" value={String(overview.posts_count)} />
               </>
@@ -165,13 +165,19 @@ export function AnalyticsPage() {
               <p className="font-semibold text-c-text-secondary">No analytics yet.</p>
               <p className="text-sm text-c-text-muted">Post your first clip to see data here.</p>
             </div>
+          ) : !loadingPosts && posts.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+              <div className="text-4xl">⏳</div>
+              <p className="font-semibold text-c-text-secondary">No stats yet.</p>
+              <p className="text-sm text-c-text-muted">Views and likes are collected every 6 hours once a post is live.</p>
+            </div>
           ) : (
             <>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-c-border text-left">
-                      {["Platform", "Post ID", "Views", "Likes", "Engagement", "Virality", "Fetched At"].map(
+                      {["Platform", "Post", "Views", "Likes", "Engagement", "Virality", "Updated"].map(
                         (h) => (
                           <th
                             key={h}
@@ -199,15 +205,23 @@ export function AnalyticsPage() {
                                 {platformLabel(p.platform)}
                               </span>
                             </td>
-                            <td className="px-4 py-3 font-mono text-[11px] text-c-text-muted">
-                              {p.platform_post_id.length > 14
-                                ? `${p.platform_post_id.slice(0, 14)}…`
-                                : p.platform_post_id}
+                            <td className="max-w-[320px] px-4 py-3">
+                              {p.url
+                                ? <a href={p.url} target="_blank" rel="noopener noreferrer"
+                                    className="line-clamp-2 text-[13px] font-medium text-c-text hover:underline">
+                                    {p.title || p.platform_post_id}
+                                  </a>
+                                : <span className="line-clamp-2 text-[13px] font-medium">{p.title || p.platform_post_id}</span>}
+                              {p.posted_at && (
+                                <span className="text-[11px] text-c-text-muted">
+                                  Posted {new Date(p.posted_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                                </span>
+                              )}
                             </td>
                             <td className="px-4 py-3 font-semibold">{fmt(p.views)}</td>
                             <td className="px-4 py-3 font-semibold">{fmt(p.likes)}</td>
                             <td className="px-4 py-3 text-c-text-secondary">
-                              {p.engagement_rate.toFixed(2)}%
+                              {((p.engagement_rate ?? 0) * 100).toFixed(2)}%
                             </td>
                             <td className="px-4 py-3">
                               <span
@@ -218,7 +232,7 @@ export function AnalyticsPage() {
                               </span>
                             </td>
                             <td className="px-4 py-3 text-[11px] text-c-text-muted">
-                              {new Date(p.fetched_at).toLocaleDateString("en-US", {
+                              {p.fetched_at && new Date(p.fetched_at).toLocaleDateString("en-US", {
                                 month: "short",
                                 day: "numeric",
                                 hour: "2-digit",

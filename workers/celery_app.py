@@ -18,6 +18,7 @@ _include = [
     "workers.tasks.websub",
     "workers.tasks.gsheet",
     "workers.tasks.webhook",
+    "workers.tasks.analytics",
 ]
 if not _is_light:
     _include += [
@@ -102,6 +103,12 @@ celery_app.conf.beat_schedule = {
         # (GENERATION_LEAD_HOURS before their scheduled publish time).
         "task": "workers.tasks.series.process_due_series",
         "schedule": crontab(minute="*/5"),
+    },
+    "refresh-analytics": {
+        # Views/likes/comments for posted clips (Analytics page). An interval (not a
+        # crontab) so the first run happens as soon as beat starts with this entry.
+        "task": "workers.tasks.analytics.refresh_analytics",
+        "schedule": 6 * 3600.0,
     },
     "reconcile-stuck-videos": {
         # Backstop: re-enqueue / fail videos orphaned by a worker crash or restart
