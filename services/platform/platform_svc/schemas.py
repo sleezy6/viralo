@@ -7,6 +7,15 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, field_validator
 
 
+def sign_media_url(value: str | None) -> str | None:
+    """Local-storage media (/storage/…) is only served with a fresh signature; links
+    from other providers pass through. A stored link's old signature is replaced."""
+    if value and value.startswith("/storage/"):
+        from shared.storage.local import sign_local_url
+        return sign_local_url(urlparse(value).path)
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Social Accounts
 # ---------------------------------------------------------------------------
@@ -95,6 +104,8 @@ class ScheduledPostResponse(BaseModel):
     updated_at: Any
 
     model_config = {"from_attributes": True}
+
+    _sign_media = field_validator("clip_storage_url", "clip_thumbnail_url", mode="before")(sign_media_url)
 
 
 class ScheduledPostListResponse(BaseModel):

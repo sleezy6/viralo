@@ -15,6 +15,7 @@ from platform_svc.schemas import (
     ScheduledPostListResponse,
     ScheduledPostResponse,
     ScheduledPostUpdate,
+    sign_media_url,
 )
 
 router = APIRouter(tags=["scheduling"])
@@ -34,8 +35,8 @@ async def _thumbnails_for(db: AsyncSession, clip_ids: list[uuid.UUID]) -> dict[u
 
 
 def _with_clip_media(resp: ScheduledPostResponse, post: ScheduledPost, thumbnails: dict[uuid.UUID, str]) -> ScheduledPostResponse:
-    resp.clip_storage_url = post.clip_storage_url
-    resp.clip_thumbnail_url = thumbnails.get(post.clip_id) if post.clip_id else None
+    resp.clip_storage_url = sign_media_url(post.clip_storage_url)
+    resp.clip_thumbnail_url = sign_media_url(thumbnails.get(post.clip_id)) if post.clip_id else None
     return resp
 
 # ---------------------------------------------------------------------------

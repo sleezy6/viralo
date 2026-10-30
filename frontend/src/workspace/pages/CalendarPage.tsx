@@ -525,31 +525,24 @@ function PostPopover({ post, onClose, onCancelled, onPublished }: { post: Schedu
         className="relative z-10 w-full max-w-[340px] rounded-[14px] border border-c-border bg-surface-2 p-4 shadow-2xl sm:p-5"
         onClick={(e) => e.stopPropagation()}
       >
-        <button onClick={onClose} className="absolute right-3 top-3 rounded-md p-1 text-c-text-muted hover:text-c-text-secondary transition">✕</button>
+        <button onClick={onClose} aria-label="Close"
+          className="absolute right-2 top-2 z-20 grid h-8 w-8 place-items-center rounded-full bg-black/60 text-white/90 backdrop-blur transition hover:bg-black/80 hover:text-white">✕</button>
 
         {(post.clip_storage_url || post.clip_thumbnail_url) && (
-          <a
-            href={post.clip_storage_url || post.clip_thumbnail_url || "#"}
-            target="_blank"
-            rel="noreferrer"
-            className="group relative mb-3 block aspect-[9/16] max-h-[220px] w-full overflow-hidden rounded-[10px] bg-black"
-          >
+          <div className="mx-auto mb-3 aspect-[9/16] h-[min(300px,45vh)] overflow-hidden rounded-[10px] bg-black">
             {post.clip_storage_url ? (
               <video
                 src={post.clip_storage_url}
                 poster={post.clip_thumbnail_url ?? undefined}
-                className="h-full w-full object-cover"
-                muted
+                className="h-full w-full object-contain"
+                controls
                 playsInline
                 preload="metadata"
               />
             ) : (
               <img src={post.clip_thumbnail_url!} alt="clip thumbnail" className="h-full w-full object-cover" />
             )}
-            <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition group-hover:bg-black/30">
-              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white/90 text-black opacity-0 transition group-hover:opacity-100">▶</span>
-            </div>
-          </a>
+          </div>
         )}
 
         <div className="flex items-start gap-2">
