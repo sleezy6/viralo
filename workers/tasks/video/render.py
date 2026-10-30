@@ -2331,10 +2331,16 @@ def _export_clip(
             except Exception:
                 pass
 
+    # Thumbnail from the rendered clip (its own 9:16 / chosen frame, captions and all),
+    # falling back to the source frame if the render can't be read.
     try:
-        _generate_thumbnail(source_path, clip, thumb_path)
+        _generate_thumbnail(clip_path, dataclass_replace(clip, start=0.0, end=max(0.2, clip.end - clip.start)),
+                            thumb_path)
     except Exception:
-        pass
+        try:
+            _generate_thumbnail(source_path, clip, thumb_path)
+        except Exception:
+            pass
 
     thumb_key = f"clips/{tenant_id}/{clip_id}_thumb.jpg"
 

@@ -532,8 +532,9 @@ function PostPopover({ post, onClose, onCancelled, onPublished }: { post: Schedu
           <div className="mx-auto mb-3 aspect-[9/16] h-[min(300px,45vh)] overflow-hidden rounded-[10px] bg-black">
             {post.clip_storage_url ? (
               <video
-                src={post.clip_storage_url}
-                poster={post.clip_thumbnail_url ?? undefined}
+                // No poster: older thumbnails are wide source frames. "#t=0.1" makes the
+                // browser show the clip's own (vertical) first frame instead.
+                src={`${post.clip_storage_url}#t=0.1`}
                 className="h-full w-full object-contain"
                 controls
                 playsInline
